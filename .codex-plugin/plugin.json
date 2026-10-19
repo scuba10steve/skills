@@ -1,0 +1,10 @@
+{
+  "name": "skills",
+  "version": "0.1.0",
+  "description": "Portable agent skills for pull requests, reviews, research, and work tracking",
+  "author": {"name": "Steven Tompkins", "email": "steven.tompkins.jr@gmail.com"},
+  "homepage": "https://github.com/scuba10steve/skills",
+  "repository": "https://github.com/scuba10steve/skills",
+  "license": "MIT",
+  "skills": "./skills/"
+}
