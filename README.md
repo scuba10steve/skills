@@ -27,7 +27,7 @@ Each skill folder is self-contained, so you can copy just one into a skills dire
 
 ```
 /plugin marketplace add scuba10steve/skills
-/plugin install skills@skills
+/plugin install skills@scuba10steve
 ```
 
 For a local checkout, use `claude --plugin-dir <path>`. Manifests: `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`.
