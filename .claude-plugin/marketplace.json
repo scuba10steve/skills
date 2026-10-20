@@ -1,0 +1,14 @@
+{
+  "name": "scuba10steve",
+  "description": "Portable agent skills for pull requests, reviews, research, and work tracking",
+  "owner": {"name": "Steven Tompkins", "email": "steven.tompkins.jr@gmail.com"},
+  "plugins": [
+    {
+      "name": "skills",
+      "description": "Portable agent skills for pull requests, reviews, research, and work tracking",
+      "version": "0.1.0",
+      "source": "./",
+      "author": {"name": "Steven Tompkins", "email": "steven.tompkins.jr@gmail.com"}
+    }
+  ]
+}
