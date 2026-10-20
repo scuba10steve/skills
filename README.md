@@ -34,7 +34,11 @@ For a local checkout, use `claude --plugin-dir <path>`. Manifests: `.claude-plug
 
 ### Codex CLI
 
-Codex installs plugins from a marketplace JSON (`.agents/plugins/marketplace.json` in a repo, or `~/.agents/plugins/marketplace.json`). It prefers the root `plugin.json` (portable Agent Plugins format); `.codex-plugin/plugin.json` is the compatibility layout and is also shipped. This repo does not ship a Codex marketplace file, so add the repo to your own.
+```
+codex plugin marketplace add scuba10steve/skills
+```
+
+Then enable `skills@scuba10steve`. Marketplace: `.agents/plugins/marketplace.json`. Codex prefers the root `plugin.json` (portable Agent Plugins format); `.codex-plugin/plugin.json` is the compatibility layout and is also shipped.
 
 ### Cursor
 
@@ -47,11 +51,11 @@ Install as a Power from the marketplace or a GitHub URL (Agent Plugins format). 
 ### GitLab Duo CLI
 
 ```
-duo plugin marketplace add <url>
-duo plugin install <plugin>@<marketplace>
+duo plugin marketplace add https://github.com/scuba10steve/skills.git
+duo plugin install skills@scuba10steve
 ```
 
-Duo reads the root `plugin.json` (and legacy `.claude-plugin/plugin.json`). This repo does not ship a Duo marketplace file. Alternatively copy the skills to `skills/` or `.agents/skills/` in a project, or `~/.gitlab/duo/skills/` (GitLab 18.10+, CLI 8.73+). Whether bundled scripts can be executed is not documented.
+Duo reads the root `plugin.json` (and legacy `.claude-plugin/plugin.json`), and uses `.claude-plugin/marketplace.json` as its marketplace file. Alternatively copy the skills to `skills/` or `.agents/skills/` in a project, or `~/.gitlab/duo/skills/` (GitLab 18.10+, CLI 8.73+). Whether bundled scripts can be executed is not documented.
 
 ### OpenCode
 
