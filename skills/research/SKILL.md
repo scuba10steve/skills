@@ -61,8 +61,8 @@ The deep budget is used only with consent: an explicit ask in the request (e.g.
 like it warrants more depth, then by policy: `allow` uses the deep budget
 without asking; `deny` uses the default and says the deep budget is available
 (an explicit ask still wins); `ask` offers the deep budget and waits for an
-answer. If you can't ask, use the default and say that the deep budget is
-available.
+answer. Under `ask`, if you can't ask, use the default and say that the deep
+budget is available.
 
 Announce the budget, e.g. `Budget: 3 sub-queries, 5 fetches.` The sub-query
 count **is** the budget; never decompose into six and research three.

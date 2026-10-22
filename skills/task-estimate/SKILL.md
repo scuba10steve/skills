@@ -94,7 +94,7 @@ Deep-scope (a read-only exploration subagent) is the expensive path. Run it only
 
 **Capability guard:** the harness can dispatch subagents.
 
-If the trigger holds and the user passed `--deep`, proceed to Step 3. If the trigger holds without `--deep`: under `allow`, proceed to Step 3 without asking; under `deny`, skip to Step 4 and say `--deep` is available; under `ask`, ask whether to run deep-scope. On yes, proceed to Step 3. On no, skip to Step 4. If you can't ask (non-interactive run), show a preview of what deep-scope would do (the Step 3 prompt, with the heuristic JSON filled in) and stop; do not quietly skip it and do not run it. If the trigger does not hold, skip to Step 4. If the guard fails, say deep-scope is unavailable here and skip to Step 4.
+If the trigger holds and the user passed `--deep`, proceed to Step 3. If the trigger holds without `--deep`: under `allow`, proceed to Step 3 without asking; under `deny`, skip to Step 4 and say `--deep` is available; under `ask`, ask whether to run deep-scope. On yes, proceed to Step 3. On no, skip to Step 4. Under `ask`, if you can't ask (non-interactive run), show a preview of what deep-scope would do (the Step 3 prompt, with the heuristic JSON filled in) and stop; do not quietly skip it and do not run it. If the trigger does not hold, skip to Step 4. If the guard fails, say deep-scope is unavailable here and skip to Step 4.
 
 ### Step 3 — Deep-scope subagent
 

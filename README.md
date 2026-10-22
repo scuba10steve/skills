@@ -117,7 +117,7 @@ Your file is deep-merged over the defaults in memory on every run: your values w
 
 An optional policy file pre-answers the choices skills otherwise ask about. With no file, every skill behaves as before.
 
-Path: `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy`. Format: `key=value` lines. A line whose first non-space character is `#` is a comment; an inline `#` after a value is not, so `fan_out=allow # work` has the value `allow # work`, which is invalid (`ask`, or passed literally for `review_model`). Keys and values are trimmed, CRLF is tolerated, unknown keys are ignored, the last occurrence wins, an unreadable file counts as absent, and an empty value is unset. Each affected skill prints a `Policy: key=value (source)` line.
+Path: `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy`. Format: `key=value` lines. A line whose first non-space character is `#` is a comment; an inline `#` after a value is not, so `fan_out=allow # work` has the value `allow # work`, which is invalid (`ask`, or passed literally for `review_model`). Keys and values are trimmed, CRLF is tolerated, unknown keys are ignored, the last occurrence wins, an unreadable file counts as absent, and an empty value is unset. Each affected skill prints a `Policy:` line for the keys it resolves; `review_model` and `review_effort` are resolved in the script, and their only output is the `review_model=auto` stderr notice.
 
 | Key | Values | Governs | Skills |
 |---|---|---|---|
@@ -125,8 +125,8 @@ Path: `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy`. Format: `key=v
 | `deep_budget` | `allow` / `deny` / `ask` | expensive budget tiers | `research` (deep budget), `task-estimate` (deep-scope subagent) |
 | `multi_target` | `allow` / `deny` / `ask` | multi-target outside reviews | `outside-voice`, `spec-and-plan` |
 | `review_targets` | comma list | default reviewer targets when none are named | `outside-voice`, `spec-and-plan` |
-| `review_model` | `auto` / `<model-id>` / unset | reviewer model passed to kiro | `outside-voice` |
-| `review_effort` | `<level>` / unset | `--effort` passed to kiro builds that support it | `outside-voice` |
+| `review_model` | `auto` / `<model-id>` / unset | reviewer model passed to kiro | `outside-voice`, `spec-and-plan` |
+| `review_effort` | `<level>` / unset | `--effort` passed to kiro builds that support it | `outside-voice`, `spec-and-plan` |
 
 - `allow`: take the expensive path without asking when the skill's own trigger is met. `deny`: do not offer it; take the cheap path and say the expensive one is available on request. `ask`: the default. Any other value resolves to `ask`.
 - An explicit request beats `deny` (`--deep`, "go deep", naming several targets). Policy pre-answers the offer; it never blocks a direct instruction.
@@ -146,7 +146,7 @@ A literal `review_model=<id>` pins the model; unset passes no `--model`.
 
 `review_targets` is a comma list of `claude`, `gemini`, `codex`, `opencode`, `kiro`, `duo`. Unknown names and duplicates are dropped, names whose CLI is not installed are skipped, and `all` is not accepted. It applies only when the user named no targets. One resolved target runs alone; two or more follow `multi_target`.
 
-Exception: with or without a policy file, if the user named no targets and every target about to run matches the caller's own provider (`claude`, `codex`, `gemini`, `duo`; `kiro` and `opencode` never match), `outside-voice` asks before dispatching, since the review would not be independent. Explicitly named targets dispatch as before.
+Exception: if the user named no targets and every target about to run matches the caller's own provider (`claude`, `codex`, `gemini`, `duo`; `kiro` and `opencode` never match), the skill asks before dispatching, since the review would not be independent. In `outside-voice` that only happens when `review_targets` is set (so a policy file exists); the only change without a policy file is the `spec-and-plan` gate's default single-target proposal. Explicitly named targets dispatch as before.
 
 ## Name collisions
 
