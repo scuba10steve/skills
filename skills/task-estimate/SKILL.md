@@ -21,6 +21,19 @@ Estimate token usage for a task before starting it, so the user can decide wheth
 - `/task-estimate --deep "<prompt>"` → force deep-scope subagent.
 - `/task-estimate --no-split "<prompt>"` → suppress split-prompt generation at L/XL.
 
+## Policy
+
+Resolve the `deep_budget` policy (`allow`, `deny`, or `ask`):
+
+```bash
+policy="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"
+v="$(tr -d '\r' 2>/dev/null < "$policy" | sed -n 's/^[[:space:]]*deep_budget[[:space:]]*=[[:space:]]*//p' | sed 's/[[:space:]]*$//' | tail -n 1)"
+case "$v" in allow|deny|ask) src="$policy" ;; "") v=ask; src=default ;; *) src="default; invalid value '$v' in $policy"; v=ask ;; esac
+echo "Policy: deep_budget=$v ($src)"
+```
+
+Print the `Policy:` line. Unset or invalid means `ask`.
+
 ## Procedure
 
 ### Step 1 — Run the heuristic
@@ -81,7 +94,7 @@ Deep-scope (a read-only exploration subagent) is the expensive path. Run it only
 
 **Capability guard:** the harness can dispatch subagents.
 
-If the trigger holds and the user passed `--deep`, proceed to Step 3. If the trigger holds without `--deep`, ask whether to run deep-scope. On yes, proceed to Step 3. On no, skip to Step 4. If you can't ask (non-interactive run), show a preview of what deep-scope would do (the Step 3 prompt, with the heuristic JSON filled in) and stop; do not quietly skip it and do not run it. If the trigger does not hold, skip to Step 4. If the guard fails, say deep-scope is unavailable here and skip to Step 4.
+If the trigger holds and the user passed `--deep`, proceed to Step 3. If the trigger holds without `--deep`: under `allow`, proceed to Step 3 without asking; under `deny`, skip to Step 4 and say `--deep` is available; under `ask`, ask whether to run deep-scope. On yes, proceed to Step 3. On no, skip to Step 4. If you can't ask (non-interactive run), show a preview of what deep-scope would do (the Step 3 prompt, with the heuristic JSON filled in) and stop; do not quietly skip it and do not run it. If the trigger does not hold, skip to Step 4. If the guard fails, say deep-scope is unavailable here and skip to Step 4.
 
 ### Step 3 — Deep-scope subagent
 
