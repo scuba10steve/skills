@@ -10,7 +10,7 @@ Dispatch the current work to another harness for a read-only review.
 ## Args
 
 - `/outside-voice <targets> "<instruction>" [path ...]`
-- `<targets>`: `claude|gemini|codex|opencode|kiro|duo`, a comma list, or `all`.
+- `<targets>`: `claude|gemini|codex|opencode|kiro|duo`, a comma list, or `all`. May be omitted (`/outside-voice "<instruction>" [path ...]`) only when `review_targets` resolves non-empty (see Policy).
 - Optional flags: `--parallel` (run multi-target reviews concurrently; default sequential), `--timeout <sec>` (per-target cap), `--yes` (confirm a multi-target/`all` run).
 - Optional flags cont.: `--base <ref>` (diff against this ref instead of the detected base branch), `--avoid <provider>` (override the autodetected caller provider).
 
@@ -61,11 +61,67 @@ caller is `opencode`, whose backing provider is invisible to us. Either one
 means the collision notices may be wrong for this run — pass `--avoid
 <provider>` to make the caller's provider explicit instead of guessed.
 
+## Policy
+
+Before dispatch, resolve `multi_target` (`allow`, `deny`, or `ask`) and
+`review_targets`:
+
+```bash
+policy="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"
+v="$(tr -d '\r' 2>/dev/null < "$policy" | sed -n 's/^[[:space:]]*multi_target[[:space:]]*=[[:space:]]*//p' | sed 's/[[:space:]]*$//' | tail -n 1)"
+case "$v" in allow|deny|ask) src="$policy" ;; "") v=ask; src=default ;; *) src="default; invalid value '$v' in $policy"; v=ask ;; esac
+echo "Policy: multi_target=$v ($src)"
+t="$(tr -d '\r' 2>/dev/null < "$policy" | sed -n 's/^[[:space:]]*review_targets[[:space:]]*=[[:space:]]*//p' | sed 's/[[:space:]]*$//' | tail -n 1)"
+printf '%s\n' "$t" | tr ',' '\n' | {
+  l=; r=
+  while read -r n; do
+    case " $l " in *" $n "*) continue ;; esac
+    case "$n" in
+      "") continue ;;
+      claude|gemini|codex|opencode) b=$n ;;
+      kiro) b=kiro-cli ;;
+      duo) b=glab ;;
+      *) echo "Policy: review_targets dropped unknown name '$n'"; continue ;;
+    esac
+    l="$l $n"
+    command -v "$b" >/dev/null 2>&1 && r="${r:+$r,}$n"
+  done
+  if [ -z "$l" ]; then echo "Policy: review_targets=none (default)"
+  elif [ -z "$r" ]; then echo "Policy: review_targets=none ($policy; none of$l installed)"
+  else echo "Policy: review_targets=$r ($policy)"; fi
+}
+```
+
+Print every `Policy:` line. Unset or invalid `multi_target` means `ask`.
+
+If the user named targets, use them and ignore `review_targets`. Several named
+targets: under `allow`, show step 2's preview then re-run with `--yes` without
+waiting; under `ask` or `deny`, step 2 as written (naming them is the request,
+so `deny` never blocks it).
+
+If the user named none, the resolved `review_targets` list decides:
+
+- **Two or more:** under `ask`, propose the list and ask, then step 2; under
+  `allow`, step 2's preview then `--yes` without waiting; under `deny`, run the
+  first alone and say the rest are available on request.
+- **One:** run it as a single target (step 1).
+- **`none`, "none of ... installed":** say `review_targets` matched no installed
+  CLI, then ask for a target as without a policy.
+- **`none (default)`:** `<targets>` is required, as without a policy.
+- **No reviewer CLI installed at all:** say so and stop.
+
+**Same-provider rule** (with or without a policy file): if every target about
+to run is one of `claude` (anthropic), `codex` (openai), `gemini` (google), or
+`duo` (gitlab) and matches your own harness's provider (or `--avoid`), ask
+before dispatching — the review would not come from an independent model.
+`kiro` and `opencode` never match. If you can't ask, don't dispatch; say why
+and stop.
+
 ## Procedure
 
 `<skill-dir>` is the directory containing this `SKILL.md`.
 
-1. For a SINGLE target, run and relay verbatim:
+1. For a SINGLE target (subject to the same-provider rule), run and relay verbatim:
 
    ```bash
    bash <skill-dir>/scripts/outside-voice.sh <targets> "<instruction>" [paths...]
@@ -73,8 +129,8 @@ means the collision notices may be wrong for this run — pass `--avoid
 
 2. For MULTIPLE targets or `all`, first run WITHOUT `--yes` to get the cost
    preview and show the resolved target list to the user. Never take the
-   expensive path without explicit consent, given either in the original request
-   or as an answer to the ask. If you can't ask the user, report the preview and
+   expensive path without explicit consent, given in the original request, as
+   an answer to the ask, or by `multi_target=allow`. If you can't ask the user, report the preview and
    stop; do not quietly run fewer targets and do not go ahead. Only on approval,
    re-run with `--yes`:
 
