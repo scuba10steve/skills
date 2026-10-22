@@ -31,7 +31,7 @@ bash <skill-dir>/scripts/task-estimate.sh --json <the user's arguments>
 
 `<skill-dir>` is the directory containing this `SKILL.md`.
 
-Thresholds, the session cap, and other settings come from `${XDG_CONFIG_HOME:-~/.config}/skills/task-estimate.json` (flat keys: `buckets.{s,m,l}`, `session_cap`, `verbs`, `scope_adverbs`, `phase_split`, `multi_agent`, and an optional `providers`). The file is auto-created with defaults on first run when its directory is writable; any key it omits falls back to the default.
+Thresholds, the session cap, and other settings come from `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (flat keys: `buckets.{s,m,l}`, `session_cap`, `verbs`, `scope_adverbs`, `phase_split`, `multi_agent`, and an optional `providers`). The file is auto-created with defaults on first run when its directory is writable; any key it omits falls back to the default.
 
 Capture the JSON. Read `bucket`, `confidence`, `requested_deep`.
 
@@ -112,7 +112,7 @@ Validate the returned JSON via `jq -e .`. If invalid, log to stderr, fall back t
 
 If deep-scope returned valid JSON:
 1. Replace `estimate.total/low/high` and `breakdown` with the agent's numbers.
-2. **Re-derive `bucket`** from the new `estimate.total` using the thresholds in `.buckets.{s,m,l}` of `${XDG_CONFIG_HOME:-~/.config}/skills/task-estimate.json` (defaults 15000/40000/75000 when absent). Use the same `< threshold` semantics as the script's `bucket_for` function.
+2. **Re-derive `bucket`** from the new `estimate.total` using the thresholds in `.buckets.{s,m,l}` of `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (defaults 15000/40000/75000 when absent). Use the same `< threshold` semantics as the script's `bucket_for` function.
 3. **Re-derive `recommendation`** from the new bucket using the same prose as `recommendation_for` in the script (S/M → "Fits comfortably...", L → "Tight against session cap...", XL → "Will overflow session cap...").
 4. Set `method: "deep-scope"`, `confidence: "high"`.
 5. If the merged bucket is now XL, follow Step 5 to generate scope-split prompts (the script's L phase-split prompts, if any, should be discarded).
@@ -133,7 +133,7 @@ Artifacts: <run_dir>
 The script does not pre-create the run-id directory at XL bucket (only L triggers `render_phase_split`). Before writing any scope-N.md files, materialize the directory yourself:
 
 ```sh
-mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/skills/task-estimate/<run-id>"
+mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/scuba10steve-skills/task-estimate/<run-id>"
 ```
 
 For each unit in `decomposition`:
@@ -153,10 +153,10 @@ Original task:
 
 Unit rationale: <rationale from agent>
 
-Coordination doc: ${XDG_CACHE_HOME:-$HOME/.cache}/skills/task-estimate/<run-id>/README.md
+Coordination doc: ${XDG_CACHE_HOME:-$HOME/.cache}/scuba10steve-skills/task-estimate/<run-id>/README.md
 ```
 
-Write each to `${XDG_CACHE_HOME:-$HOME/.cache}/skills/task-estimate/<run-id>/scope-<N>.md`. Create `${XDG_CACHE_HOME:-$HOME/.cache}/skills/task-estimate/<run-id>/README.md` (the script did not write one at XL) listing the run-id, bucket, parallel execution ordering, and each scope unit's filename (plus its provider when the config defines providers).
+Write each to `${XDG_CACHE_HOME:-$HOME/.cache}/scuba10steve-skills/task-estimate/<run-id>/scope-<N>.md`. Create `${XDG_CACHE_HOME:-$HOME/.cache}/scuba10steve-skills/task-estimate/<run-id>/README.md` (the script did not write one at XL) listing the run-id, bucket, parallel execution ordering, and each scope unit's filename (plus its provider when the config defines providers).
 
 Treat an empty array (`decomposition: []`) the same as `null`.
 

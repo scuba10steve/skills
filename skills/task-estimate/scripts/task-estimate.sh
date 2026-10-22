@@ -46,7 +46,8 @@ fi
 
 # --- config ---
 
-CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/skills/task-estimate.json"
+CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/task-estimate.json"
+LEGACY_CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/skills/task-estimate.json"
 
 DEFAULT_CONFIG=$(cat <<'JSON'
 {
@@ -81,9 +82,12 @@ JSON
 )
 
 load_config() {
-    local dir
+    local dir read_path="$CONFIG_PATH"
     dir="$(dirname "$CONFIG_PATH")"
-    if [[ ! -f "$CONFIG_PATH" ]]; then
+    if [[ ! -f "$CONFIG_PATH" && -f "$LEGACY_CONFIG_PATH" ]]; then
+        echo "notice: reading legacy config $LEGACY_CONFIG_PATH; move it to $CONFIG_PATH" >&2
+        read_path="$LEGACY_CONFIG_PATH"
+    elif [[ ! -f "$CONFIG_PATH" ]]; then
         if mkdir -p "$dir" 2>/dev/null && [[ -w "$dir" ]]; then
             printf '%s\n' "$DEFAULT_CONFIG" > "$CONFIG_PATH" 2>/dev/null || true
         fi
@@ -91,8 +95,8 @@ load_config() {
         return
     fi
     # Deep merge: user values win; anything the user's file omits comes from the defaults.
-    jq -s '.[0] * .[1]' <(printf '%s' "$DEFAULT_CONFIG") "$CONFIG_PATH" 2>/dev/null || {
-        echo "error: cannot parse $CONFIG_PATH" >&2
+    jq -s '.[0] * .[1]' <(printf '%s' "$DEFAULT_CONFIG") "$read_path" 2>/dev/null || {
+        echo "error: cannot parse $read_path" >&2
         exit 1
     }
 }
@@ -295,7 +299,7 @@ PH_VERIFY=$(( PH_VERIFY + PH_DELTA ))
 
 # --- run id + artifacts ---
 
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/skills/task-estimate"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/scuba10steve-skills/task-estimate"
 
 # Deterministic-ish run id: short hash of prompt, prefixed with the date.
 generate_run_id() {
