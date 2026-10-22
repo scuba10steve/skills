@@ -124,6 +124,27 @@ for t in claude codex gemini duo opencode; do
     assert_eq "no model for $t" "" "$(OUTSIDE_VOICE_MODEL=foo reviewer_model "$t" anthropic)"
 done
 
+setpol() { mkdir -p "$(dirname "$POLICY_FILE")"; local l; : > "$POLICY_FILE"; for l in "$@"; do printf "%s\n" "$l" >> "$POLICY_FILE"; done; }
+assert_eq "auto anthropic" "gpt-5.6-terra" "$(auto_model_for anthropic)"
+assert_eq "auto openai" "claude-opus-5" "$(auto_model_for openai)"
+assert_eq "auto unknown" "claude-opus-5" "$(auto_model_for unknown)"
+assert_eq "auto google" "claude-opus-5" "$(auto_model_for google)"
+setpol review_model=auto
+assert_eq "policy auto via reviewer_model" "gpt-5.6-terra" "$(reviewer_model kiro anthropic 2>/dev/null)"
+assert_contains "auto notice" "review_model=auto: kiro --model gpt-5.6-terra (caller provider: anthropic)" "$(reviewer_model kiro anthropic 2>&1 >/dev/null)"
+assert_contains "default-row notice" "a default, not an avoidance choice" "$(reviewer_model kiro unknown 2>&1 >/dev/null)"
+assert_eq "auto not applied to claude" "" "$(reviewer_model claude anthropic 2>/dev/null)"
+assert_eq "env beats policy" "foo" "$(OUTSIDE_VOICE_MODEL=foo reviewer_model kiro anthropic)"
+assert_eq "env auto is literal" "auto" "$(OUTSIDE_VOICE_MODEL=auto reviewer_model kiro anthropic)"
+assert_eq "empty env model defers to policy" "gpt-5.6-terra" "$(OUTSIDE_VOICE_MODEL= reviewer_model kiro anthropic 2>/dev/null)"
+setpol review_model=pinned-x
+assert_eq "policy literal" "pinned-x" "$(reviewer_model kiro anthropic)"
+setpol review_effort=low
+assert_eq "policy effort" "low" "$(reviewer_effort)"
+assert_eq "env effort beats policy" "high" "$(OUTSIDE_VOICE_EFFORT=high reviewer_effort)"
+rm -f "$POLICY_FILE"
+assert_eq "no effort without policy" "" "$(reviewer_effort)"
+
 # gather_context in a temp git repo: dirty-only fallback on main
 TMPREPO="$(mktemp -d)"; ( cd "$TMPREPO"
     git init -q; git config user.email t@e; git config user.name t
@@ -319,6 +340,18 @@ assert_contains "old kiro-cli still gets model flag" "--model foo" "$mko"
 # The pre-feature flags are still present in both cases.
 assert_contains "kiro keeps trust-tools" "--trust-tools=fs_read" "$mk"
 assert_contains "kiro keeps no-interactive" "--no-interactive" "$mkp"
+
+printf '#!/usr/bin/env bash\nif [[ "$*" == *--help* ]]; then echo "      --effort <EFFORT>"; exit 0; fi\necho "ARGV: $*"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/kiro-cli"
+setpol review_model=auto review_effort=low
+pa="$(cd "$TR" && bash "$SCRIPT" --avoid anthropic kiro "review" </dev/null 2>/dev/null)"
+assert_contains "policy auto anthropic argv model" "--model gpt-5.6-terra" "$pa"
+assert_contains "policy effort argv" "--effort low" "$pa"
+po="$(cd "$TR" && bash "$SCRIPT" --avoid openai kiro "review" </dev/null 2>/dev/null)"
+assert_contains "policy auto openai argv model" "--model claude-opus-5" "$po"
+printf '#!/usr/bin/env bash\nif [[ "$*" == *--help* ]]; then echo "      --model <MODEL>"; exit 0; fi\necho "ARGV: $*"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/kiro-cli"
+pn="$(cd "$TR" && bash "$SCRIPT" --avoid anthropic kiro "review" </dev/null 2>/dev/null)"
+assert_eq "policy effort skipped when kiro lacks it" "0" "$(printf '%s' "$pn" | grep -c -- '--effort' | tr -d ' ')"
+rm -f "$POLICY_FILE"
 
 # A fixed-provider target's command line is untouched by model selection.
 printf '#!/usr/bin/env bash\necho "ARGV: $*"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/claude"

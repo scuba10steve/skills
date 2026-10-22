@@ -29,10 +29,11 @@ Environment:
   OUTSIDE_VOICE_TIMEOUT     per-target timeout in seconds (default: 180; --timeout wins)
   OUTSIDE_VOICE_OUTPUT_CAP  max reviewer output lines shown per target (default: 800)
   OUTSIDE_VOICE_DIFF_CAP    max diff lines sent to reviewers (default: 2000)
-  OUTSIDE_VOICE_MODEL       model passed as --model to kiro (default: unset)
-  OUTSIDE_VOICE_EFFORT      effort passed as --effort to kiro when supported (default: unset)
+  OUTSIDE_VOICE_MODEL       model passed as --model to kiro; beats policy review_model (default: unset)
+  OUTSIDE_VOICE_EFFORT      effort passed as --effort to kiro when supported; beats policy review_effort (default: unset)
 
 Policy file (optional): ${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy
+  review_model (kiro; "auto" picks a different provider family), review_effort
 EOF
 }
 
@@ -134,14 +135,45 @@ target_providers() {
     esac
 }
 
+# auto_model_for <provider> -> the kiro model from a different provider family.
+auto_model_for() {
+    case "$1" in
+        anthropic) echo gpt-5.6-terra ;;
+        *)         echo claude-opus-5 ;;
+    esac
+}
+
 # reviewer_model <name> <avoid> -> a model identifier, or nothing.
-# Empty output means "pass no --model flag". Only kiro takes a model, and only
-# when OUTSIDE_VOICE_MODEL is set.
+# Empty output means "pass no --model flag". Only kiro takes a model:
+# OUTSIDE_VOICE_MODEL (literal) wins, then policy review_model (auto = pick
+# from the caller provider).
 reviewer_model() {
-    local name="$1"
+    local name="$1" avoid="${2:-}" pm m
     [[ "$name" == "kiro" ]] || return 0
-    [[ -n "${OUTSIDE_VOICE_MODEL:-}" ]] || return 0
-    printf '%s\n' "$OUTSIDE_VOICE_MODEL"
+    if [[ -n "${OUTSIDE_VOICE_MODEL:-}" ]]; then
+        printf '%s\n' "$OUTSIDE_VOICE_MODEL"; return 0
+    fi
+    pm="$(policy_get review_model)"
+    [[ -n "$pm" ]] || return 0
+    if [[ "$pm" == "auto" ]]; then
+        m="$(auto_model_for "$avoid")"
+        case "$avoid" in
+            anthropic|openai) printf 'review_model=auto: kiro --model %s (caller provider: %s)\n' "$m" "$avoid" >&2 ;;
+            *) printf 'review_model=auto: kiro --model %s (caller provider: %s); a default, not an avoidance choice\n' "$m" "$avoid" >&2 ;;
+        esac
+        printf '%s\n' "$m"
+    else
+        printf '%s\n' "$pm"
+    fi
+}
+
+# reviewer_effort -> effort for kiro, or nothing.
+reviewer_effort() {
+    if [[ -n "${OUTSIDE_VOICE_EFFORT:-}" ]]; then
+        printf '%s\n' "$OUTSIDE_VOICE_EFFORT"
+    else
+        policy_get review_effort
+    fi
 }
 
 # warn_provider_collisions <avoid> <target>... -> stderr notices, always rc 0.
@@ -404,7 +436,8 @@ run_target() {
                   [[ -n "$model" ]] && kiro_args+=(--model "$model")
                   # Older kiro-cli builds reject --effort outright, so probe
                   # --help rather than failing the whole review.
-                  [[ -n "${OUTSIDE_VOICE_EFFORT:-}" ]] && kiro_supports_effort && kiro_args+=(--effort "$OUTSIDE_VOICE_EFFORT")
+                  local effort; effort="$(reviewer_effort)"
+                  [[ -n "$effort" ]] && kiro_supports_effort && kiro_args+=(--effort "$effort")
                   run_with_timeout "$secs" kiro-cli chat --no-interactive \
                       --trust-tools=fs_read ${kiro_args[@]+"${kiro_args[@]}"} "$prompt" ;;
         duo)      run_with_timeout "$secs" glab duo cli --yes run --goal "$prompt" ;;
