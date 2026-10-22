@@ -6,7 +6,7 @@
     {
       "name": "skills",
       "description": "Portable agent skills for pull requests, reviews, research, and work tracking",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./",
       "author": {"name": "Steven Tompkins", "email": "steven.tompkins.jr@gmail.com"}
     }

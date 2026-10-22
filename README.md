@@ -46,7 +46,7 @@ Install through the Customize panel. For local development, place the repo in `~
 
 ### Kiro (IDE and CLI v3)
 
-Install as a Power from the marketplace or a GitHub URL (Agent Plugins format). Manifest: root `plugin.json`, which has no `skills` field; Kiro finds the fixed `skills/` directory. Plain skills can also be copied to `.kiro/skills/` or `~/.kiro/skills/`. A CLI-only plugin system is not documented.
+Install as a Power from the marketplace or a GitHub URL (Agent Plugins format). Manifest: root `plugin.json`, which has no `skills` field; Kiro finds the fixed `skills/` directory. Plain skills can also be copied to `.kiro/skills/` or `~/.kiro/skills/`. `kiro-cli powers install <catalog-name|local-path>` installs a Power from a catalog name or local path; `--help` lists no URL form (as of 2.32.0). `npx skills add scuba10steve/skills -g -a kiro-cli` installs to `~/.kiro/skills/`. A custom Kiro agent must list `skill://~/.kiro/skills/**/SKILL.md` in its `resources` to load global skills.
 
 ### GitLab Duo CLI
 
@@ -71,7 +71,11 @@ Manifest: `gemini-extension.json`; skills in `skills/` are discovered automatica
 
 ### Any other harness
 
-Copy the folders in `skills/` into your harness's skills directory.
+```
+npx skills add scuba10steve/skills -g -a <agent…>
+```
+
+Or copy the folders in `skills/` into your harness's skills directory.
 
 ## Requirements
 
@@ -89,10 +93,10 @@ Copy the folders in `skills/` into your harness's skills directory.
 | `OUTSIDE_VOICE_TIMEOUT` | `180` | Per-target timeout in seconds (`--timeout` wins) |
 | `OUTSIDE_VOICE_OUTPUT_CAP` | `800` | Max reviewer output lines shown per target |
 | `OUTSIDE_VOICE_DIFF_CAP` | `2000` | Max diff lines sent to reviewers |
-| `OUTSIDE_VOICE_MODEL` | unset | Model passed as `--model` to kiro |
-| `OUTSIDE_VOICE_EFFORT` | unset | Effort passed as `--effort` to kiro when supported |
+| `OUTSIDE_VOICE_MODEL` | unset | Model passed as `--model` to kiro; literal, beats policy `review_model` (empty = unset) |
+| `OUTSIDE_VOICE_EFFORT` | unset | Effort passed as `--effort` to kiro when supported; literal, beats policy `review_effort` (empty = unset) |
 
-`task-estimate` reads `${XDG_CONFIG_HOME:-~/.config}/skills/task-estimate.json`. It is written with defaults on first run (when the directory is writable) and has flat top-level keys:
+`task-estimate` reads `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (cache: `${XDG_CACHE_HOME:-~/.cache}/scuba10steve-skills/task-estimate/`). In 0.2.x, if the new file is absent and the old `${XDG_CONFIG_HOME:-~/.config}/skills/task-estimate.json` exists, it is read with a stderr notice and the new file is not created; move it to the new path. The cache has no fallback. The config file is written with defaults on first run (when the directory is writable) and has flat top-level keys:
 
 ```json
 {
@@ -108,6 +112,41 @@ Copy the folders in `skills/` into your harness's skills directory.
 Your file is deep-merged over the defaults in memory on every run: your values win, and any key you omit, at any depth, uses the default. The file itself is never rewritten. If the directory is not writable, the defaults are used without writing anything.
 
 `"providers": {"planning"|"bulk_edit"|"verify": "<harness name>"}` is optional; the labels are shown on split prompts.
+
+### Tuning
+
+An optional policy file pre-answers the choices skills otherwise ask about. With no file, every skill behaves as before.
+
+Path: `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy`. Format: `key=value` lines. A line whose first non-space character is `#` is a comment; an inline `#` after a value is not, so `fan_out=allow # work` has the value `allow # work`, which is invalid (`ask`, or passed literally for `review_model`). Keys and values are trimmed, CRLF is tolerated, unknown keys are ignored, the last occurrence wins, an unreadable file counts as absent, and an empty value is unset. Each affected skill prints a `Policy: key=value (source)` line.
+
+| Key | Values | Governs | Skills |
+|---|---|---|---|
+| `fan_out` | `allow` / `deny` / `ask` | parallel subagents for large inputs | `clean-comments` (sweep > 20 files) |
+| `deep_budget` | `allow` / `deny` / `ask` | expensive budget tiers | `research` (deep budget), `task-estimate` (deep-scope subagent) |
+| `multi_target` | `allow` / `deny` / `ask` | multi-target outside reviews | `outside-voice`, `spec-and-plan` |
+| `review_targets` | comma list | default reviewer targets when none are named | `outside-voice`, `spec-and-plan` |
+| `review_model` | `auto` / `<model-id>` / unset | reviewer model passed to kiro | `outside-voice` |
+| `review_effort` | `<level>` / unset | `--effort` passed to kiro builds that support it | `outside-voice` |
+
+- `allow`: take the expensive path without asking when the skill's own trigger is met. `deny`: do not offer it; take the cheap path and say the expensive one is available on request. `ask`: the default. Any other value resolves to `ask`.
+- An explicit request beats `deny` (`--deep`, "go deep", naming several targets). Policy pre-answers the offer; it never blocks a direct instruction.
+- `multi_target=allow` replaces the confirmation ask, not the cost preview, which is still shown before `--yes`.
+- `OUTSIDE_VOICE_MODEL` and `OUTSIDE_VOICE_EFFORT` beat `review_model` and `review_effort`. `OUTSIDE_VOICE_MODEL=auto` passes `--model auto` literally.
+- `review_effort` goes through the same `--effort` capability probe as the env var.
+
+`review_model=auto` applies to kiro only, picking a model from a different provider than the caller:
+
+| Caller provider | kiro `--model` |
+|---|---|
+| `anthropic` | `gpt-5.6-terra` |
+| `openai` | `claude-opus-5` |
+| anything else, including `unknown` | `claude-opus-5` (a default, not an avoidance choice; the notice says so) |
+
+A literal `review_model=<id>` pins the model; unset passes no `--model`.
+
+`review_targets` is a comma list of `claude`, `gemini`, `codex`, `opencode`, `kiro`, `duo`. Unknown names and duplicates are dropped, names whose CLI is not installed are skipped, and `all` is not accepted. It applies only when the user named no targets. One resolved target runs alone; two or more follow `multi_target`.
+
+Exception: with or without a policy file, if the user named no targets and every target about to run matches the caller's own provider (`claude`, `codex`, `gemini`, `duo`; `kiro` and `opencode` never match), `outside-voice` asks before dispatching, since the review would not be independent. Explicitly named targets dispatch as before.
 
 ## Name collisions
 
