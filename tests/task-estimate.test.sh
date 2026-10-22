@@ -8,8 +8,9 @@ export HOME="$TMPROOT/home"
 export XDG_CONFIG_HOME="$TMPROOT/config"
 export XDG_CACHE_HOME="$TMPROOT/cache"
 mkdir -p "$HOME"
-CONFIG_FILE="$XDG_CONFIG_HOME/skills/task-estimate.json"
-CACHE_ROOT="$XDG_CACHE_HOME/skills/task-estimate"
+CONFIG_FILE="$XDG_CONFIG_HOME/scuba10steve-skills/task-estimate.json"
+LEGACY_FILE="$XDG_CONFIG_HOME/skills/task-estimate.json"
+CACHE_ROOT="$XDG_CACHE_HOME/scuba10steve-skills/task-estimate"
 
 SCRIPT_DIR="$( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )"
 SCRIPT="$SCRIPT_DIR/../skills/task-estimate/scripts/task-estimate.sh"
@@ -127,6 +128,49 @@ test_readonly_config_dir_uses_defaults() {
     assert_eq "read-only config dir writes nothing" "" "$(ls -A "$ro")"
 }
 test_readonly_config_dir_uses_defaults
+
+test_legacy_config_fallback() {
+    rm -rf "$XDG_CONFIG_HOME"
+    mkdir -p "$(dirname "$LEGACY_FILE")"
+    echo '{"session_cap":222000}' > "$LEGACY_FILE"
+    local out errf="$TMPROOT/legacy.err"
+    out=$(bash "$SCRIPT" --json "refactor the auth module everywhere" 2>"$errf") || true
+    assert_contains "legacy config value used" "~222k" "$(echo "$out" | jq -r '.recommendation' 2>/dev/null)"
+    assert_contains "legacy notice names legacy config" "legacy config" "$(cat "$errf")"
+    assert_contains "legacy notice names new path" "$CONFIG_FILE" "$(cat "$errf")"
+    [[ ! -e "$CONFIG_FILE" ]] && { PASS=$((PASS + 1)); echo "  ok  legacy fallback writes no new config"; } \
+        || { FAIL=$((FAIL + 1)); echo "  FAIL legacy fallback wrote $CONFIG_FILE"; }
+    assert_eq "legacy file unchanged" '{"session_cap":222000}' "$(cat "$LEGACY_FILE")"
+    rm -rf "$XDG_CONFIG_HOME"
+}
+test_legacy_config_fallback
+
+test_new_config_beats_legacy() {
+    rm -rf "$XDG_CONFIG_HOME"
+    mkdir -p "$(dirname "$LEGACY_FILE")" "$(dirname "$CONFIG_FILE")"
+    echo '{"session_cap":222000}' > "$LEGACY_FILE"
+    echo '{"session_cap":333000}' > "$CONFIG_FILE"
+    local out errf="$TMPROOT/both.err"
+    out=$(bash "$SCRIPT" --json "refactor the auth module everywhere" 2>"$errf") || true
+    assert_contains "new config wins over legacy" "~333k" "$(echo "$out" | jq -r '.recommendation' 2>/dev/null)"
+    [[ "$(cat "$errf")" != *legacy* ]] && { PASS=$((PASS + 1)); echo "  ok  no legacy notice when new config exists"; } \
+        || { FAIL=$((FAIL + 1)); echo "  FAIL legacy notice printed with new config present"; }
+    rm -rf "$XDG_CONFIG_HOME"
+}
+test_new_config_beats_legacy
+
+test_cache_namespace() {
+    rm -rf "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    echo '{"buckets":{"s":1,"m":2,"l":100000000}}' > "$CONFIG_FILE"
+    (cd /tmp && bash "$SCRIPT" --json "refactor the auth module everywhere" >/dev/null 2>&1) || true
+    rm -rf "$XDG_CONFIG_HOME"
+    [[ -n "$(ls -A "$CACHE_ROOT" 2>/dev/null)" ]] && { PASS=$((PASS + 1)); echo "  ok  artifacts under scuba10steve-skills cache"; } \
+        || { FAIL=$((FAIL + 1)); echo "  FAIL no artifacts under $CACHE_ROOT"; }
+    [[ ! -e "$XDG_CACHE_HOME/skills" ]] && { PASS=$((PASS + 1)); echo "  ok  nothing under legacy cache dir"; } \
+        || { FAIL=$((FAIL + 1)); echo "  FAIL legacy cache dir created"; }
+}
+test_cache_namespace
 
 # --- heuristic core ---
 

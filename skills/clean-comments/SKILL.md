@@ -30,9 +30,24 @@ Review comments in code — by default the current diff — and remove or rewrit
    - If both are empty (clean tree), fall back to `git diff HEAD~1`.
 4. Regardless of path, skip generated/vendored files: `node_modules`, `vendor`, `dist`, `build`, other compiled/lockfile output, and binary files. Use judgment for project-specific equivalents (e.g. `.terraform/`).
 
+## Policy
+
+Before sweep dispatch, resolve the `fan_out` policy (`allow`, `deny`, or `ask`):
+
+```bash
+policy="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"
+v="$(tr -d '\r' 2>/dev/null < "$policy" | sed -n 's/^[[:space:]]*fan_out[[:space:]]*=[[:space:]]*//p' | sed 's/[[:space:]]*$//' | tail -n 1)"
+case "$v" in allow|deny|ask) src="$policy" ;; "") v=ask; src=default ;; *) src="default; invalid value '$v' in $policy"; v=ask ;; esac
+echo "Policy: fan_out=$v ($src)"
+```
+
+Print the `Policy:` line. Unset or invalid means `ask`.
+
 ## Sweep dispatch (large `--sweep` only)
 
 Compute file count for the resolved sweep scope. If `> 20` files:
+
+Under `deny`, process files inline, sequentially, and say parallel review is available on request; if the user asked for parallel agents, dispatch them anyway. Under `allow`, dispatch the parallel subagents described below without asking. Under `ask`:
 
 Ask the user: *"This sweep covers N files. Dispatch parallel review agents split by directory and aggregate? (y/N)"*. On yes, dispatch parallel subagents, each given a directory slice, the removal criteria and preserve rules below, the apply mode (dry-run vs `--apply`), and any custom directive — then merge their reported changes into one summary. On no, on a non-interactive run, or when the harness has no subagents, process files inline, sequentially. With `≤ 20` files, process inline.
 

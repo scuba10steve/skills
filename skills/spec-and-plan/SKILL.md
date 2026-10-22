@@ -104,22 +104,73 @@ is the multi-target confirmation dance, replicated in gate step 1.
 Apply once per written artifact.
 
 1. **Dispatch.** `<skill-dir>` is the directory containing this `SKILL.md`.
-   Propose one installed target, chosen from `outside-voice.sh`'s resolution,
-   and ask before proposing several. Never take the expensive path without
-   explicit consent, given either in the original request or as an answer to
-   the ask; if you can't ask, show the preview and stop. Pass the artifact as
-   an **exact file path** — a directory pathspec deliberately cannot reach
-   gitignored files.
+   First resolve `multi_target` (`allow`, `deny`, or `ask`) and
+   `review_targets`, and print every `Policy:` line:
+   ```bash
+   policy="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"
+   v="$(tr -d '\r' 2>/dev/null < "$policy" | sed -n 's/^[[:space:]]*multi_target[[:space:]]*=[[:space:]]*//p' | sed 's/[[:space:]]*$//' | tail -n 1)"
+   case "$v" in allow|deny|ask) src="$policy" ;; "") v=ask; src=default ;; *) src="default; invalid value '$v' in $policy"; v=ask ;; esac
+   echo "Policy: multi_target=$v ($src)"
+   t="$(tr -d '\r' 2>/dev/null < "$policy" | sed -n 's/^[[:space:]]*review_targets[[:space:]]*=[[:space:]]*//p' | sed 's/[[:space:]]*$//' | tail -n 1)"
+   printf '%s\n' "$t" | tr ',' '\n' | {
+     l=; r=
+     while read -r n; do
+       case " $l " in *" $n "*) continue ;; esac
+       case "$n" in
+         "") continue ;;
+         claude|gemini|codex|opencode) b=$n ;;
+         kiro) b=kiro-cli ;;
+         duo) b=glab ;;
+         *) echo "Policy: review_targets dropped unknown name '$n'"; continue ;;
+       esac
+       l="$l $n"
+       command -v "$b" >/dev/null 2>&1 && r="${r:+$r,}$n"
+     done
+     if [ -z "$l" ]; then echo "Policy: review_targets=none (default)"
+     elif [ -z "$r" ]; then echo "Policy: review_targets=none ($policy; none of$l installed)"
+     else echo "Policy: review_targets=$r ($policy)"; fi
+   }
+   ```
+   Unset or invalid `multi_target` means `ask`. Choose targets:
 
-   Single target — dispatches immediately, no confirmation gate:
+   - **User named targets:** use them; ignore `review_targets`. Several named:
+     under `allow`, preview then `--yes` without waiting; otherwise preview
+     and confirm (`deny` never blocks an explicit request).
+   - **`review_targets` resolved two or more:** under `ask`, propose the list
+     and ask; under `allow`, preview then `--yes` without waiting; under
+     `deny`, run the first and say the rest are available on request.
+   - **Resolved one:** single target.
+   - **Resolved `none`:** propose one installed target, chosen from
+     `outside-voice.sh`'s resolution, and ask before proposing several. If the
+     line says none of the listed CLIs is installed, say `review_targets`
+     matched nothing.
+   - **No reviewer CLI installed:** say so, skip this gate, and record the skip
+     in chat.
+
+   **Same-provider rule** (with or without a policy file; only when the user
+   named no targets — explicitly named targets dispatch as today): if every
+   target about to run is `claude` (anthropic), `codex` (openai), `gemini`
+   (google), or `duo` (gitlab) and matches your own provider, ask before
+   dispatching — the review would not come from an independent model. `kiro` and `opencode`
+   never match. Declining, or being unable to ask, skips this gate; record the
+   skip in chat.
+
+   Never take the expensive path without explicit consent, given in the
+   original request, as an answer to the ask, or by `multi_target=allow`; if
+   you can't ask, show the preview and stop. Pass the artifact as an **exact
+   file path** — a directory pathspec deliberately cannot reach gitignored
+   files.
+
+   Single target — dispatches immediately, no confirmation gate (unless the
+   same-provider rule applies):
    ```bash
    bash <skill-dir>/scripts/outside-voice.sh <target> "<instruction>" <artifact-path>
    ```
 
    Multiple targets — a comma list with no spaces, or `all`. Run **without**
    `--yes` first; that prints the resolved target list and cost estimate and
-   exits without dispatching. Show it, get explicit approval, then re-run with
-   `--yes`:
+   exits without dispatching. Show it, get explicit approval (or proceed under
+   `allow`), then re-run with `--yes`:
    ```bash
    bash <skill-dir>/scripts/outside-voice.sh <target1>,<target2> "<instruction>" <artifact-path>
    bash <skill-dir>/scripts/outside-voice.sh --yes <target1>,<target2> "<instruction>" <artifact-path>

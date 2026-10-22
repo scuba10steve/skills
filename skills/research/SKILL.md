@@ -36,6 +36,19 @@ is crossed, the report path. Shell state does not survive between tool calls, so
 a later call that needs `slug` re-runs that block (question binding included)
 rather than assuming the variable is still set.
 
+## Policy
+
+Resolve the `deep_budget` policy (`allow`, `deny`, or `ask`):
+
+```bash
+policy="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"
+v="$(tr -d '\r' 2>/dev/null < "$policy" | sed -n 's/^[[:space:]]*deep_budget[[:space:]]*=[[:space:]]*//p' | sed 's/[[:space:]]*$//' | tail -n 1)"
+case "$v" in allow|deny|ask) src="$policy" ;; "") v=ask; src=default ;; *) src="default; invalid value '$v' in $policy"; v=ask ;; esac
+echo "Policy: deep_budget=$v ($src)"
+```
+
+Print the `Policy:` line. Unset or invalid means `ask`.
+
 ## Budget
 
 - default → 3 sub-queries, 5 fetches
@@ -45,8 +58,11 @@ rather than assuming the variable is still set.
 
 The deep budget is used only with consent: an explicit ask in the request (e.g.
 "deep", "thorough"), or the user saying yes when offered. If the question looks
-like it warrants more depth, offer the deep budget and wait for an answer. If you
-can't ask, use the default and say that the deep budget is available.
+like it warrants more depth, then by policy: `allow` uses the deep budget
+without asking; `deny` uses the default and says the deep budget is available
+(an explicit ask still wins); `ask` offers the deep budget and waits for an
+answer. Under `ask`, if you can't ask, use the default and say that the deep
+budget is available.
 
 Announce the budget, e.g. `Budget: 3 sub-queries, 5 fetches.` The sub-query
 count **is** the budget; never decompose into six and research three.
