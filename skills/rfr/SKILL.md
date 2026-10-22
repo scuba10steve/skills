@@ -1,6 +1,6 @@
 ---
 name: rfr
-description: Draft "RFR: <pr/mr-link>" in Slack or copy it to the clipboard for Microsoft Teams. Use when the user invokes /rfr or asks to request review of the current PR/MR in chat.
+description: 'Draft "RFR: <pr/mr-link>" in Slack or copy it to the clipboard for Microsoft Teams. Use when the user invokes /rfr or asks to request review of the current PR/MR in chat.'
 ---
 
 # Request For Review (RFR)
