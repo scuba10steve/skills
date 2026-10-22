@@ -110,7 +110,8 @@ If the user named none, the resolved `review_targets` list decides:
 - **`none (default)`:** `<targets>` is required, as without a policy.
 - **No reviewer CLI installed at all:** say so and stop.
 
-**Same-provider rule** (with or without a policy file): if every target about
+**Same-provider rule** (with or without a policy file; only when the user named
+no targets — explicitly named targets dispatch as today): if every target about
 to run is one of `claude` (anthropic), `codex` (openai), `gemini` (google), or
 `duo` (gitlab) and matches your own harness's provider (or `--avoid`), ask
 before dispatching — the review would not come from an independent model.

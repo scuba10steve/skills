@@ -147,10 +147,11 @@ Apply once per written artifact.
    - **No reviewer CLI installed:** say so, skip this gate, and record the skip
      in chat.
 
-   **Same-provider rule** (with or without a policy file): if every target
-   about to run is `claude` (anthropic), `codex` (openai), `gemini` (google),
-   or `duo` (gitlab) and matches your own provider, ask before dispatching —
-   the review would not come from an independent model. `kiro` and `opencode`
+   **Same-provider rule** (with or without a policy file; only when the user
+   named no targets — explicitly named targets dispatch as today): if every
+   target about to run is `claude` (anthropic), `codex` (openai), `gemini`
+   (google), or `duo` (gitlab) and matches your own provider, ask before
+   dispatching — the review would not come from an independent model. `kiro` and `opencode`
    never match. Declining, or being unable to ask, skips this gate; record the
    skip in chat.
 
