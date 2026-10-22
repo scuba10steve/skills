@@ -3,7 +3,9 @@
 set -uo pipefail
 
 USER_HOME_BACKUP="$HOME"
-trap 'export HOME="$USER_HOME_BACKUP"; [[ -n "${STUBDIR:-}" ]] && rm -rf "$STUBDIR"' EXIT
+POLICY_HOME="$(mktemp -d)"; export XDG_CONFIG_HOME="$POLICY_HOME"
+POLICY_FILE="$XDG_CONFIG_HOME/scuba10steve-skills/policy"
+trap 'export HOME="$USER_HOME_BACKUP"; rm -rf "$POLICY_HOME"; [[ -n "${STUBDIR:-}" ]] && rm -rf "$STUBDIR"' EXIT
 
 SCRIPT_DIR="$( cd "$(dirname "${BASH_SOURCE[0]}")" && pwd )"
 SCRIPT="$SCRIPT_DIR/../skills/outside-voice/scripts/outside-voice.sh"
@@ -83,6 +85,21 @@ assert_eq "caller override is silent" "" "$( cp_scrub; AVOID_OVERRIDE=openai;  c
 assert_eq "caller opencode is silent" "" "$( cp_scrub; OPENCODE_BIN=/tmp/oc;   caller_provider 2>&1 >/dev/null )"
 # First match wins when several fingerprints are set at once.
 assert_eq "caller first match wins" "anthropic" "$( cp_scrub; CLAUDECODE=1; CODEX_HOME=/tmp; caller_provider 2>/dev/null )"
+
+# --- policy_get ---
+assert_eq "policy_get is defined" "0" "$(declare -f policy_get >/dev/null 2>&1; echo $?)"
+assert_eq "policy_path" "$POLICY_FILE" "$(policy_path)"
+assert_eq "missing file" "" "$(policy_get review_model)"
+mkdir -p "$(dirname "$POLICY_FILE")"
+printf '# comment\n  review_model =  foo  \nfan_out=allow\nbogus=1\n#review_effort=high\nfan_out=deny\nmulti_target=allow # work\nreview_effort=high\r\nempty=\n' > "$POLICY_FILE"
+assert_eq "trimmed value" "foo" "$(policy_get review_model)"
+assert_eq "last wins" "deny" "$(policy_get fan_out)"
+assert_eq "commented key absent" "" "$(policy_get deep_budget)"
+assert_eq "comment line ignored" "high" "$(policy_get review_effort)"
+assert_eq "inline comment kept raw" "allow # work" "$(policy_get multi_target)"
+assert_eq "empty value" "" "$(policy_get empty)"
+chmod 000 "$POLICY_FILE"; assert_eq "unreadable = absent" "" "$(policy_get fan_out 2>/dev/null)"; chmod 644 "$POLICY_FILE"
+rm -f "$POLICY_FILE"
 
 # --- target_providers / reviewer_model -------------------------------------
 # An `assert_eq "" "$(fn ...)"` passes when fn is undefined as well as when it

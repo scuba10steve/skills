@@ -31,6 +31,8 @@ Environment:
   OUTSIDE_VOICE_DIFF_CAP    max diff lines sent to reviewers (default: 2000)
   OUTSIDE_VOICE_MODEL       model passed as --model to kiro (default: unset)
   OUTSIDE_VOICE_EFFORT      effort passed as --effort to kiro when supported (default: unset)
+
+Policy file (optional): ${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy
 EOF
 }
 
@@ -166,6 +168,27 @@ warn_provider_collisions() {
 }
 
 diff_cap() { echo "${OUTSIDE_VOICE_DIFF_CAP:-2000}"; }
+
+policy_path() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"; }
+
+# policy_get <key> -> last trimmed value for key, or nothing. Always rc 0.
+policy_get() {
+    local want="$1" file line k v val=""
+    file="$(policy_path)"
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        k="${line#"${line%%[![:space:]]*}"}"
+        [[ "$k" == "#"* || "$k" != *=* ]] && continue
+        v="${k#*=}"; k="${k%%=*}"
+        k="${k%"${k##*[![:space:]]}"}"
+        [[ "$k" == "$want" ]] || continue
+        v="${v#"${v%%[![:space:]]*}"}"
+        val="${v%"${v##*[![:space:]]}"}"
+    done < "$file" 2>/dev/null
+    [[ -n "$val" ]] && printf '%s\n' "$val"
+    return 0
+}
 
 # base_ref -> the ref HEAD is compared against, or rc 1 when the repo offers no
 # sensible base (callers then fall back to uncommitted changes only).
