@@ -46,8 +46,9 @@ fi
 
 # --- config ---
 
-CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/task-estimate.json"
-LEGACY_CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/skills/task-estimate.json"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+CONFIG_PATH="$CONFIG_HOME/scuba10steve-skills/task-estimate.json"
+LEGACY_CONFIG_PATH="$CONFIG_HOME/skills/task-estimate.json"
 
 DEFAULT_CONFIG=$(cat <<'JSON'
 {

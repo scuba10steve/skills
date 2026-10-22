@@ -148,7 +148,7 @@ auto_model_for() {
 # OUTSIDE_VOICE_MODEL (literal) wins, then policy review_model (auto = pick
 # from the caller provider).
 reviewer_model() {
-    local name="$1" avoid="${2:-}" pm m
+    local name="$1" avoid="${2:-}" pm m sfx
     [[ "$name" == "kiro" ]] || return 0
     if [[ -n "${OUTSIDE_VOICE_MODEL:-}" ]]; then
         printf '%s\n' "$OUTSIDE_VOICE_MODEL"; return 0
@@ -157,10 +157,8 @@ reviewer_model() {
     [[ -n "$pm" ]] || return 0
     if [[ "$pm" == "auto" ]]; then
         m="$(auto_model_for "$avoid")"
-        case "$avoid" in
-            anthropic|openai) printf 'review_model=auto: kiro --model %s (caller provider: %s)\n' "$m" "$avoid" >&2 ;;
-            *) printf 'review_model=auto: kiro --model %s (caller provider: %s); a default, not an avoidance choice\n' "$m" "$avoid" >&2 ;;
-        esac
+        case "$avoid" in anthropic|openai) sfx="" ;; *) sfx="; a default, not an avoidance choice" ;; esac
+        printf 'review_model=auto: kiro --model %s (caller provider: %s)%s\n' "$m" "$avoid" "$sfx" >&2
         printf '%s\n' "$m"
     else
         printf '%s\n' "$pm"
@@ -201,12 +199,10 @@ warn_provider_collisions() {
 
 diff_cap() { echo "${OUTSIDE_VOICE_DIFF_CAP:-2000}"; }
 
-policy_path() { echo "${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"; }
-
 # policy_get <key> -> last trimmed value for key, or nothing. Always rc 0.
 policy_get() {
     local want="$1" file line k v val=""
-    file="$(policy_path)"
+    file="${XDG_CONFIG_HOME:-$HOME/.config}/scuba10steve-skills/policy"
     [[ -r "$file" ]] || return 0
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%$'\r'}"

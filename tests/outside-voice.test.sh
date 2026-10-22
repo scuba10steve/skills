@@ -88,7 +88,6 @@ assert_eq "caller first match wins" "anthropic" "$( cp_scrub; CLAUDECODE=1; CODE
 
 # --- policy_get ---
 assert_eq "policy_get is defined" "0" "$(declare -f policy_get >/dev/null 2>&1; echo $?)"
-assert_eq "policy_path" "$POLICY_FILE" "$(policy_path)"
 assert_eq "missing file" "" "$(policy_get review_model)"
 mkdir -p "$(dirname "$POLICY_FILE")"
 printf '# comment\n  review_model =  foo  \nfan_out=allow\nbogus=1\n#review_effort=high\nfan_out=deny\nmulti_target=allow # work\nreview_effort=high\r\nempty=\n' > "$POLICY_FILE"
@@ -124,7 +123,7 @@ for t in claude codex gemini duo opencode; do
     assert_eq "no model for $t" "" "$(OUTSIDE_VOICE_MODEL=foo reviewer_model "$t" anthropic)"
 done
 
-setpol() { mkdir -p "$(dirname "$POLICY_FILE")"; local l; : > "$POLICY_FILE"; for l in "$@"; do printf "%s\n" "$l" >> "$POLICY_FILE"; done; }
+setpol() { mkdir -p "$(dirname "$POLICY_FILE")"; printf '%s\n' "$@" > "$POLICY_FILE"; }
 assert_eq "auto anthropic" "gpt-5.6-terra" "$(auto_model_for anthropic)"
 assert_eq "auto openai" "claude-opus-5" "$(auto_model_for openai)"
 assert_eq "auto unknown" "claude-opus-5" "$(auto_model_for unknown)"
