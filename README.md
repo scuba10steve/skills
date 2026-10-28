@@ -96,7 +96,7 @@ Or copy the folders in `skills/` into your harness's skills directory.
 | `OUTSIDE_VOICE_MODEL` | unset | Model passed as `--model` to kiro; literal, beats policy `review_model` (empty = unset) |
 | `OUTSIDE_VOICE_EFFORT` | unset | Effort passed as `--effort` to kiro when supported; literal, beats policy `review_effort` (empty = unset) |
 
-`task-estimate` reads `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (cache: `${XDG_CACHE_HOME:-~/.cache}/scuba10steve-skills/task-estimate/`). In 0.2.x, if the new file is absent and the old `${XDG_CONFIG_HOME:-~/.config}/skills/task-estimate.json` exists, it is read with a stderr notice and the new file is not created; move it to the new path. The cache has no fallback. The config file is written with defaults on first run (when the directory is writable) and has flat top-level keys:
+`task-estimate` reads `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (cache: `${XDG_CACHE_HOME:-~/.cache}/scuba10steve-skills/task-estimate/`). The config file is written with defaults on first run (when the directory is writable) and has flat top-level keys:
 
 ```json
 {

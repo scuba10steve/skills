@@ -129,35 +129,20 @@ test_readonly_config_dir_uses_defaults() {
 }
 test_readonly_config_dir_uses_defaults
 
-test_legacy_config_fallback() {
+test_legacy_config_ignored() {
     rm -rf "$XDG_CONFIG_HOME"
     mkdir -p "$(dirname "$LEGACY_FILE")"
     echo '{"session_cap":222000}' > "$LEGACY_FILE"
     local out errf="$TMPROOT/legacy.err"
     out=$(bash "$SCRIPT" --json "refactor the auth module everywhere" 2>"$errf") || true
-    assert_contains "legacy config value used" "~222k" "$(echo "$out" | jq -r '.recommendation' 2>/dev/null)"
-    assert_contains "legacy notice names legacy config" "legacy config" "$(cat "$errf")"
-    assert_contains "legacy notice names new path" "$CONFIG_FILE" "$(cat "$errf")"
-    [[ ! -e "$CONFIG_FILE" ]] && { PASS=$((PASS + 1)); echo "  ok  legacy fallback writes no new config"; } \
-        || { FAIL=$((FAIL + 1)); echo "  FAIL legacy fallback wrote $CONFIG_FILE"; }
-    assert_eq "legacy file unchanged" '{"session_cap":222000}' "$(cat "$LEGACY_FILE")"
+    assert_contains "legacy config ignored, default session_cap used" "~100k" "$(echo "$out" | jq -r '.recommendation' 2>/dev/null)"
+    [[ "$(cat "$errf")" != *legacy* ]] && { PASS=$((PASS + 1)); echo "  ok  no legacy notice"; } \
+        || { FAIL=$((FAIL + 1)); echo "  FAIL legacy notice printed"; }
+    [[ -f "$CONFIG_FILE" ]] && { PASS=$((PASS + 1)); echo "  ok  defaults written to new config path"; } \
+        || { FAIL=$((FAIL + 1)); echo "  FAIL $CONFIG_FILE not created"; }
     rm -rf "$XDG_CONFIG_HOME"
 }
-test_legacy_config_fallback
-
-test_new_config_beats_legacy() {
-    rm -rf "$XDG_CONFIG_HOME"
-    mkdir -p "$(dirname "$LEGACY_FILE")" "$(dirname "$CONFIG_FILE")"
-    echo '{"session_cap":222000}' > "$LEGACY_FILE"
-    echo '{"session_cap":333000}' > "$CONFIG_FILE"
-    local out errf="$TMPROOT/both.err"
-    out=$(bash "$SCRIPT" --json "refactor the auth module everywhere" 2>"$errf") || true
-    assert_contains "new config wins over legacy" "~333k" "$(echo "$out" | jq -r '.recommendation' 2>/dev/null)"
-    [[ "$(cat "$errf")" != *legacy* ]] && { PASS=$((PASS + 1)); echo "  ok  no legacy notice when new config exists"; } \
-        || { FAIL=$((FAIL + 1)); echo "  FAIL legacy notice printed with new config present"; }
-    rm -rf "$XDG_CONFIG_HOME"
-}
-test_new_config_beats_legacy
+test_legacy_config_ignored
 
 test_cache_namespace() {
     rm -rf "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
