@@ -154,12 +154,7 @@ In plain-folder installs, skills such as `pr` and `research` can shadow same-nam
 
 ## Contributing
 
-There is no `lib/`, test runner or sync script. Two scripts are shared between skills and the canonical copy lives in its owning skill:
-
-- `skills/outside-voice/scripts/outside-voice.sh`, copied to `skills/spec-and-plan/scripts/`
-- `skills/open-work/scripts/open-work.sh`, copied to `skills/open-reviews/scripts/`
-
-After editing a canonical script, re-copy it to the other location. Run tests with `bash tests/<name>.test.sh` (for example `bash tests/outside-voice.test.sh`).
+Run tests with `bash tests/<name>.test.sh` (for example `bash tests/outside-voice.test.sh`).
 
 ## License
 
