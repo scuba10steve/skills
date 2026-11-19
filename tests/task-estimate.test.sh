@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# task-estimate.test.sh — assertions for task-estimate.sh
 set -uo pipefail
 
 TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/task-estimate-test.XXXXXX")"
@@ -51,8 +50,6 @@ assert_contains() {
     fi
 }
 
-# --- skeleton ---
-
 echo "skeleton"
 
 out=$(bash "$SCRIPT" --help 2>&1)
@@ -69,8 +66,6 @@ rc=0
 out=$(bash "$SCRIPT" 2>&1) || rc=$?
 assert_eq "missing prompt exits non-zero" 1 "$rc"
 assert_contains "missing prompt explains itself" "prompt" "$out"
-
-# --- config ---
 
 echo
 echo "config"
@@ -157,12 +152,10 @@ test_cache_namespace() {
 }
 test_cache_namespace
 
-# --- heuristic core ---
-
 echo
 echo "heuristic core"
 
-# Tiny prompt → small estimate (3750 floor + few chars, no multipliers + maybe cwd).
+# typo ×0.3 and 0 agents keep this under 2000.
 # Run from /tmp to avoid cwd git-modified-files contribution polluting the floor.
 out=$(cd /tmp && bash "$SCRIPT" --json "typo in button" 2>/dev/null)
 total=$(echo "$out" | jq -r '.estimate.total')
@@ -172,7 +165,7 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL tiny prompt expected <2000, got $total"
 fi
 
-# Refactor verb → ×3 multiplier kicks in (base ~3756 × 3 ≈ 11000+)
+# ×3 alone clears 11000, before agent overhead.
 out=$(bash "$SCRIPT" --json "refactor the cmux helper" 2>/dev/null)
 total=$(echo "$out" | jq -r '.estimate.total')
 if [[ "$total" =~ ^[0-9]+$ && "$total" -gt 11000 ]]; then
@@ -181,7 +174,7 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL refactor expected >11000, got $total"
 fi
 
-# Scope + amplifying verb compounds (audit ×3, everywhere ×2 → ~22000+)
+# ×3 × ×2 alone clears 22000, before agent overhead.
 out=$(bash "$SCRIPT" --json "audit everywhere across the codebase" 2>/dev/null)
 total=$(echo "$out" | jq -r '.estimate.total')
 if [[ "$total" =~ ^[0-9]+$ && "$total" -gt 22000 ]]; then
@@ -190,12 +183,9 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL scope+verb expected >22000, got $total"
 fi
 
-# --- path/repo extraction + cwd context ---
-
 echo
 echo "path/repo extraction + cwd context"
 
-# Same verb, but with a named path → larger estimate
 plain=$(bash "$SCRIPT" --json "refactor the helper" 2>/dev/null | jq -r '.estimate.total')
 with_path=$(bash "$SCRIPT" --json "refactor /tmp/some-imaginary-dir/helper.sh" 2>/dev/null | jq -r '.estimate.total')
 if [[ "$plain" =~ ^[0-9]+$ && "$with_path" =~ ^[0-9]+$ && "$with_path" -gt "$plain" ]]; then
@@ -204,13 +194,10 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL plain=$plain with_path=$with_path"
 fi
 
-# Non-git cwd: script should not fail
 out=$(cd /tmp && bash "$SCRIPT" --json "fix typo" 2>&1)
 rc=$?
 assert_eq "non-git cwd does not fail" 0 "$rc"
 assert_contains "non-git cwd still returns JSON" '"estimate"' "$out"
-
-# --- phases, buckets, confidence ---
 
 echo
 echo "phases, buckets, confidence"
@@ -222,10 +209,7 @@ assert_contains "short prompt no signals → confidence low" '"confidence":"low"
 
 out=$(bash "$SCRIPT" --json "refactor /tmp/foo/bar everywhere across the repo" 2>/dev/null)
 flat=$(echo "$out" | tr -d ' \n')
-# CALIBRATION: refactor + scope amplifies the heuristic; verify the
-# amplification fires by comparing against a no-amplifier baseline.
-# Bucket-specific behavior (L/XL triggering split prompts) is validated by
-# manual smoke runs rather than calibrated thresholds here.
+# Compare against a baseline, not a bucket, so recalibration doesn't break this.
 amplified=$(echo "$out" | jq -r '.estimate.total')
 baseline=$(bash "$SCRIPT" --json "do the task" 2>/dev/null | jq -r '.estimate.total')
 if [[ "$amplified" =~ ^[0-9]+$ && "$baseline" =~ ^[0-9]+$ && "$amplified" -gt $(( baseline * 3 )) ]]; then
@@ -235,7 +219,6 @@ else
 fi
 assert_contains "richer prompt → confidence medium" '"confidence":"medium"' "$flat"
 
-# Per-phase breakdown sums to ~total
 out=$(bash "$SCRIPT" --json "refactor /tmp/foo/bar" 2>/dev/null)
 total=$(echo "$out" | jq -r '.estimate.total')
 sum=$(echo "$out" | jq -r '.breakdown.read + .breakdown.plan + .breakdown.edit + .breakdown.verify')
@@ -249,8 +232,6 @@ if [[ "$total" =~ ^[0-9]+$ && "$sum" =~ ^[0-9]+$ ]]; then
 else
     FAIL=$((FAIL + 1)); echo "  FAIL non-numeric total=$total sum=$sum"
 fi
-
-# --- recommendation ---
 
 echo
 echo "recommendation"
@@ -286,16 +267,13 @@ case "$b" in
         FAIL=$((FAIL + 1)); echo "  FAIL unexpected bucket: $b" ;;
 esac
 
-# Human output includes the recommendation line
 out=$(bash "$SCRIPT" "fix typo" 2>/dev/null)
 assert_contains "human output shows Recommendation:" "Recommendation:" "$out"
-
-# --- split prompts + artifacts ---
 
 echo
 echo "split prompts + artifacts"
 
-# Force L bucket via a config with tiny bucket thresholds.
+# Widen the L band (50k–200k) so refactor prompts land in L, not XL.
 write_low_threshold_config() {
     local providers="${1:-}"
     mkdir -p "$(dirname "$CONFIG_FILE")"
@@ -333,7 +311,7 @@ JSON
 
 write_low_threshold_config
 
-# Prompt with paths to ensure deterministic bucket (run from /tmp to avoid git signals).
+# Run from /tmp so git-modified files don't shift the bucket.
 prompt="refactor /tmp/a/b/c.sh and /tmp/d/e/f.sh"
 out=$(cd /tmp && bash "$SCRIPT" --json "$prompt" 2>/dev/null)
 b=$(echo "$out" | jq -r '.bucket')
@@ -364,7 +342,6 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL expected L bucket with tiny thresholds, got $b (total=$(echo "$out" | jq -r '.estimate.total'))"
 fi
 
-# --no-split skips prompt generation even at L
 out=$(cd /tmp && bash "$SCRIPT" --json --no-split "$prompt" 2>/dev/null)
 n=$(echo "$out" | jq -r '.prompts | length')
 assert_eq "--no-split → 0 prompts at L" 0 "$n"
@@ -393,13 +370,11 @@ test_split_prompt_with_providers() {
 }
 test_split_prompt_with_providers
 
-# S/M bucket → 0 prompts (the original real config might trigger different buckets; reset HOME first)
+# Drop the low-threshold config so defaults apply.
 rm -f "$CONFIG_FILE"
 out=$(bash "$SCRIPT" --json "fix typo" 2>/dev/null)
 n=$(echo "$out" | jq -r '.prompts | length')
 assert_eq "non-L bucket → 0 prompts" 0 "$n"
-
-# --- low-confidence warning ---
 
 echo
 echo "low-confidence warning"
@@ -415,8 +390,6 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL no low-confidence warning"
 fi
 rm -f "$WARN_FILE2"
-
-# --- multi-agent verb mapping ---
 
 echo
 echo "multi-agent verb mapping"
@@ -444,8 +417,6 @@ assert_eq "refactor + scope → 8 agents" 8 "$(echo "$out" | jq -r '.agent_count
 out=$(cd /tmp && bash "$SCRIPT" --json "refactor only" 2>/dev/null)
 assert_eq "refactor + only → 2 agents" 2 "$(echo "$out" | jq -r '.agent_count')"
 
-# --- greedy verb matching ---
-
 echo
 echo "greedy verb matching"
 
@@ -453,14 +424,10 @@ echo "greedy verb matching"
 # so "fix typo" matches "typo|rename|one-liner" first → 0 agents.
 out=$(cd /tmp && bash "$SCRIPT" --json "fix typo" 2>/dev/null)
 assert_eq "fix typo → 0 agents (typo matched before fix)" 0 "$(echo "$out" | jq -r '.agent_count')"
-# Meanwhile apply_verb_multiplier has "fix" before "typo", so verb mult=×1.0
-# — this key-ordering mismatch is a known issue
+# TODO: verbs and verb_to_agents order fix/typo differently (mult ×1.0, 0 agents).
 
-# "fix the button" uniquely matches "fix" → 1 agent
 out=$(cd /tmp && bash "$SCRIPT" --json "fix the button" 2>/dev/null)
 assert_eq "fix button → 1 agent (unique fix match)" 1 "$(echo "$out" | jq -r '.agent_count')"
-
-# --- phase shift verbs ---
 
 echo
 echo "phase shift verbs"
@@ -485,8 +452,6 @@ else
     FAIL=$((FAIL + 1)); echo "  FAIL fix expected read > edit (read=$read_val edit=$edit_val)"
 fi
 
-# --- --deep flag ---
-
 echo
 echo "--deep flag"
 
@@ -496,17 +461,13 @@ assert_eq "requested_deep false by default" "false" "$(echo "$out" | jq -r '.req
 out=$(cd /tmp && bash "$SCRIPT" --json --deep "refactor x" 2>/dev/null)
 assert_eq "--deep sets requested_deep true" "true" "$(echo "$out" | jq -r '.requested_deep')"
 
-# --deep does not change the heuristic estimate
 shallow=$(cd /tmp && bash "$SCRIPT" --json "refactor x" 2>/dev/null | jq -r '.estimate.total')
 deep=$(cd /tmp && bash "$SCRIPT" --json --deep "refactor x" 2>/dev/null | jq -r '.estimate.total')
 assert_eq "--deep does not alter heuristic" "$shallow" "$deep"
 
-# --deep in human output mode
 out=$(cd /tmp && bash "$SCRIPT" --deep "some task" 2>/dev/null)
 rc=$?
 assert_eq "--deep exits 0 with human output" 0 "$rc"
-
-# --- config deep merge ---
 
 echo
 echo "config deep merge"

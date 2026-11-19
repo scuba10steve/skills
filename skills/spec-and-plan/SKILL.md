@@ -45,10 +45,10 @@ unreviewable. Say so out loud when it applies. If the work does not merit
 writing ~30 lines, use `superpowers:brainstorming` directly instead.
 
 "Provider-diverse" means diverse from the **caller**, not within the reviewer
-set. The script does not pick models for you: choose a target whose provider
-differs from the calling harness's. `kiro` runs its default model unless
-`OUTSIDE_VOICE_MODEL` is set; set it to pick a model from a different provider.
-One reviewer is meaningfully diverse.
+set. Choose a target whose provider differs from the calling harness's.
+`kiro`'s model comes from `OUTSIDE_VOICE_MODEL`, else the policy `review_model`
+(a literal id, or `auto`, which picks a provider family different from the
+caller's), else kiro's default. One reviewer is meaningfully diverse.
 
 ## Flow
 
@@ -175,10 +175,6 @@ Apply once per written artifact.
    bash <skill-dir>/scripts/outside-voice.sh <target1>,<target2> "<instruction>" <artifact-path>
    bash <skill-dir>/scripts/outside-voice.sh --yes <target1>,<target2> "<instruction>" <artifact-path>
    ```
-
-   If the artifact is gitignored, pass it as an exact file path — this is the
-   case the tool fix exists for. A directory pathspec deliberately cannot reach
-   ignored files.
 
    An explicitly named target whose CLI is absent warns and is dropped; if none
    are installed the tool exits 69. Propose from what is installed.

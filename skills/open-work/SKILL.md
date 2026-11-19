@@ -29,10 +29,9 @@ on this machine.
 
    Per item: `<display_id>  <forge>  <repo_id>  <title>  (<age>)  <marker>`.
 
-   **The marker comes from BOTH axes, not from `status` alone** — an earlier
-   draft of this rule derived every glyph from `status`, which cannot work
-   because `status` has only four values, one short of the six markers below,
-   and the `active`/`stale`/`unknown` split lives entirely in `session_state`:
+   **The marker comes from BOTH axes, not from `status` alone** — `status` has
+   only four values, one short of the six markers below, and the
+   `active`/`stale`/`unknown` split lives entirely in `session_state`:
 
    | `status` | `session_state` | renders as |
    |---|---|---|
@@ -108,10 +107,8 @@ on this machine.
    "Needs your review" is a legitimate result, so an expired token must never
    render identically to having no work.
 
-   **`.limits` uses the same seven keys as `.errors`** — route each one to its
-   section with the same table above rather than inferring it from the key name,
-   for the same reason: `gitlab_issues` defeats name inference. For each
-   `.limits` key add `(showing first 100 — more exist)` to that key's section.
+   **`.limits` uses the same seven keys as `.errors`** — route each key with the
+   same table. For each `.limits` key add `(showing first 100 — more exist)` to that key's section.
 
    **Session discovery failure is a separate axis.** `.errors.sessions` is one
    of two keys that feed no section: it reports that session discovery itself

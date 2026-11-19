@@ -44,7 +44,7 @@ bash <skill-dir>/scripts/task-estimate.sh --json <the user's arguments>
 
 `<skill-dir>` is the directory containing this `SKILL.md`.
 
-Thresholds, the session cap, and other settings come from `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (flat keys: `buckets.{s,m,l}`, `session_cap`, `verbs`, `scope_adverbs`, `phase_split`, `multi_agent`, and an optional `providers`). The file is auto-created with defaults on first run when its directory is writable; any key it omits falls back to the default.
+Thresholds, the session cap, and other settings come from `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (flat keys: `buckets.{s,m,l}`, `session_cap`, `verbs`, `scope_adverbs`, `phase_split`, `multi_agent`, and an optional `providers`). The file is auto-created with defaults on first run when its directory is writable (otherwise defaults are used without writing anything) and is never rewritten; it is deep-merged over the defaults on every run, so any key it omits, at any depth, falls back to the default.
 
 Capture the JSON. Read `bucket`, `confidence`, `requested_deep`.
 

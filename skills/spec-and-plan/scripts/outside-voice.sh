@@ -37,7 +37,6 @@ Policy file (optional): ${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy
 EOF
 }
 
-# Map a target name to the binary that must be on PATH.
 target_binary() {
     case "$1" in
         claude) echo claude ;; gemini) echo gemini ;; codex) echo codex ;;
@@ -62,11 +61,9 @@ resolve_targets() {
         local i
         for i in "${!requested[@]}"; do requested[i]="${requested[i]//[[:space:]]/}"; done
     fi
-    # Validate every requested name is known.
     for name in "${requested[@]}"; do
         target_binary "$name" >/dev/null 2>&1 || return 2
     done
-    # Emit in canonical priority order, installed only.
     for name in "${TARGET_ORDER[@]}"; do
         for req in "${requested[@]}"; do
             if [[ "$name" == "$req" ]] && cli_installed "$name"; then echo "$name"; break; fi
@@ -181,10 +178,8 @@ reviewer_effort() {
 warn_provider_collisions() {
     local avoid="$1"; shift
     local name provs
-    # An unidentified caller cannot collide with anything; warning that a target
-    # "shares the caller's provider (unknown)" would be noise, not information.
-    # But the batch's diversity guarantee is unenforced in this case, and that
-    # must not be silent either.
+    # Unknown caller: no collision is detectable, so say the diversity
+    # guarantee is unenforced instead.
     if [[ "$avoid" == "unknown" ]]; then
         echo "⚠ caller provider unidentified; provider diversity not enforced (override with --avoid)" >&2
         return 0
@@ -220,8 +215,6 @@ policy_get() {
 
 # base_ref -> the ref HEAD is compared against, or rc 1 when the repo offers no
 # sensible base (callers then fall back to uncommitted changes only).
-# Order: --base override, the remote's declared default branch, then the
-# conventional names, preferring a local branch but falling back to origin/.
 # On the base branch itself we use its remote counterpart, so committed-but-
 # unpushed work stays in scope instead of collapsing to an empty range.
 base_ref() {
@@ -247,22 +240,14 @@ base_ref() {
     return 1
 }
 
-# CANDIDATES holds one review's snapshot of untracked/ignored files.
-# gather_context fills it exactly once via snapshot_candidates; both scoped_diff
-# and the pre-dispatch announcement read it. Enumerating separately per consumer
-# would let the announced set and the transmitted set diverge if the worktree
-# changed in between, breaking the promise that every file sent was listed
-# first — and gather_context calls scoped_diff twice, so it would enumerate
-# three times per run.
+# One snapshot per review, filled by gather_context, so the announced file
+# list and the transmitted file list cannot diverge.
 CANDIDATES=()
 
 # untracked_candidates -> NUL-delimited untracked/ignored files under PATHS.
 #
-# Ignored files are reachable ONLY through an exact-file pathspec. A directory
-# pathspec must never sweep ignored descendants: ignored trees routinely hold
-# credentials and review targets are external providers. Untracked-but-not-ignored files carry no such
-# expectation — they are already visible to `git status` — so those may expand
-# from a directory pathspec.
+# Ignored files only via exact-file pathspec: ignored trees often hold
+# credentials and reviewers are external.
 #
 # One invocation per category, not one per path: a single `git ls-files` call
 # collapses overlapping and repeated pathspecs, and the two categories are
@@ -284,11 +269,8 @@ untracked_candidates() {
     for p in "${PATHS[@]}"; do
         [[ -f "$p" ]] && exact+=("$p")
     done
-    # The non-ignored query needs no pathspec restriction: `--exclude-standard`
-    # without `--ignored` cannot return an ignored file no matter what the
-    # pathspec matches, and untracked-not-ignored files are already visible to
-    # `git status`. Leaving it glob-capable keeps path arguments behaving as
-    # they do for the tracked `git diff` above, which is not literal either.
+    # Globs on purpose, like the tracked git diff; without --ignored this query
+    # cannot return ignored files.
     git ls-files -z --others --exclude-standard -- "${PATHS[@]}" 2>/dev/null
     if [[ "${#exact[@]}" -gt 0 ]]; then
         # GIT_LITERAL_PATHSPECS=1 matters HERE, and only here. Without it the
@@ -323,9 +305,7 @@ scoped_diff() {
         git diff ${flags[@]+"${flags[@]}"} "$base...HEAD" ${pathspec[@]+"${pathspec[@]}"} 2>/dev/null || true
     fi
     git diff ${flags[@]+"${flags[@]}"} HEAD ${pathspec[@]+"${pathspec[@]}"} 2>/dev/null || true
-    # Third source: explicitly-passed untracked/ignored files, which the two
-    # calls above cannot see. Reads the snapshot rather than re-enumerating.
-    # `--no-index` exits 1 on difference, hence `|| true`.
+    # Explicitly passed untracked/ignored files. --no-index exits 1 on difference.
     local f
     for f in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
         git diff --no-index ${flags[@]+"${flags[@]}"} -- /dev/null "$f" 2>/dev/null || true
@@ -415,11 +395,8 @@ run_with_timeout() {
 #   codex    `codex exec -` consumes stdin (live-confirmed; needs OpenAI auth)
 #   gemini   `-p ""` + stdin-append (form accepted; needs GEMINI_API_KEY)
 #   kiro     positional arg (live-confirmed)
-#   opencode positional arg + `--agent` (2.3.0: inline agent live-confirmed to resolve;
-#            deny enforcement unverified live, no reachable provider; SIGKILL-protected).
-#            The agent is defined inline via OPENCODE_CONFIG_CONTENT so the user's
-#            own permission rules cannot grant the reviewer edits or shell; OpenCode
-#            documents deny rules as enforced even when non-interactive.
+#   opencode positional arg + `--agent` (2.3.0: inline agent resolves live; deny
+#            enforcement unverified live, no reachable provider; SIGKILL-protected)
 #   duo      `run --goal <prompt>` (goal is a required flag; stdin is NOT read.
 #            UNVERIFIED end-to-end — needs `glab auth login`; without --goal it
 #            drops into the interactive TUI. timeout+SIGKILL degrades a hang cleanly)

@@ -47,9 +47,10 @@ pass it explicitly: `--base origin/release-2.4`.
 ## Model diversity
 
 Pick a target whose provider differs from the calling harness's, so the
-reviewer does not share the author's blind spots. The script does not choose
-models: `kiro` runs its default model unless `OUTSIDE_VOICE_MODEL` is set (see
-Configuration); set it to pick a model from a different provider.
+reviewer does not share the author's blind spots. `kiro`'s model comes from
+`OUTSIDE_VOICE_MODEL`, else the policy `review_model` (a literal id, or `auto`,
+which picks a provider family different from the caller's), else kiro's default
+(see Configuration).
 
 `claude`, `codex`, `gemini`, and `duo` are each locked to one provider; when one
 of them matches the caller you get a `⚠ shares the caller's provider` notice,
@@ -166,5 +167,10 @@ Environment knobs, all optional:
 - `OUTSIDE_VOICE_TIMEOUT`: per-target timeout in seconds (default 180; `--timeout` wins).
 - `OUTSIDE_VOICE_OUTPUT_CAP`: max reviewer output lines shown per target (default 800).
 - `OUTSIDE_VOICE_DIFF_CAP`: max diff lines sent to reviewers (default 2000).
-- `OUTSIDE_VOICE_MODEL`: model passed as `--model` to kiro (default unset).
-- `OUTSIDE_VOICE_EFFORT`: effort passed to kiro as `--effort` when supported (default unset).
+- `OUTSIDE_VOICE_MODEL`: model passed as `--model` to kiro (default unset); literal, beats policy `review_model` (empty = unset).
+- `OUTSIDE_VOICE_EFFORT`: effort passed to kiro as `--effort` when supported (default unset); literal, beats policy `review_effort` (empty = unset).
+
+Policy file keys (path as in Policy), both optional and beaten by the env knobs above:
+
+- `review_model`: kiro model, `auto` or a literal id; `auto` picks a provider family different from the caller's.
+- `review_effort`: `--effort` for kiro builds that support it.

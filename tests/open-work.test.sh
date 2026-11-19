@@ -39,11 +39,9 @@ rc=0; out=$("$BASH" "$SCRIPT" --bogus 2>&1) || rc=$?
 assert_eq "unknown flag exits 1" 1 "$rc"
 assert_contains "unknown flag explains itself" "Unknown" "$out"
 
-# Library mode: functions are callable after sourcing.
 out=$(OPEN_WORK_LIB=1 "$BASH" -c 'source "$1"; open_work_usage' _ "$SCRIPT" 2>&1)
 assert_contains "library mode exposes callable functions" "Usage:" "$out"
 
-# Library mode: sourcing does not dispatch.
 out=$(OPEN_WORK_LIB=1 "$BASH" -c 'source "$1"' _ "$SCRIPT" 2>&1)
 assert_not_contains "library mode does not dispatch" '"sessions"' "$out"
 
@@ -110,7 +108,6 @@ mkdir -p "$wt"
 printf '{"type":"user","timestamp":"%s","x":1}\n' "$old_ts" > "$wt/s.jsonl"
 assert_eq "worktree slug resolves" "$old_ts" "$(last_conversation_ts '/Users/demo/code/widget/.worktrees/featbranch')"
 
-# No project dir at all -> non-zero exit, empty stdout.
 rc=0; out=$(last_conversation_ts /Users/demo/nope) || rc=$?
 assert_eq "missing project dir exits non-zero" 1 "$rc"
 assert_eq "missing project dir prints nothing" "" "$out"
@@ -130,9 +127,7 @@ rc=0; out=$(last_conversation_ts /Users/demo/code/empty) || rc=$?
 assert_eq "only-untimestamped exits non-zero" 1 "$rc"
 assert_eq "only-untimestamped prints nothing" "" "$out"
 
-# Finding 1: tail -n 800 bound is load-bearing. More than 800 untimestamped records
-# after the last user/assistant record must cause non-zero return (unknown), not a wrong
-# timestamp from earlier in the file.
+# The 800-line bound must yield unknown, not an older timestamp.
 proj_bound="$HOME/.claude/projects/-Users-demo-code-overflow"
 mkdir -p "$proj_bound"
 {
@@ -143,8 +138,6 @@ rc=0; out=$(last_conversation_ts /Users/demo/code/overflow) || rc=$?
 assert_eq ">800 untimestamped lines after last user returns non-zero" 1 "$rc"
 assert_eq "overflow case prints nothing" "" "$out"
 
-# Finding 2: Type filter correctly ignores timestamped non-user/non-assistant records.
-# A newer system record with a timestamp must not override an older user record.
 proj_type="$HOME/.claude/projects/-Users-demo-code-typefilt"
 mkdir -p "$proj_type"
 system_ts="$(date -u -v-1H +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S.000Z)"
@@ -157,18 +150,13 @@ assert_eq "older user timestamp chosen over newer system timestamp" "$old_ts" "$
 assert_eq "type filter works" 0 "$rc"
 
 echo "collect_sessions"
-# collect_sessions returns {sessions, errors} so a discovery failure has somewhere
-# to go. Unwrap the array here; the error channel is asserted below.
 sess_doc=$(HOME="$REAL_HOME" collect_sessions 2>/dev/null)
 assert_eq "emits an object with a sessions key and an errors key" "true" \
   "$(printf '%s' "$sess_doc" | jq 'has("sessions") and has("errors")')"
 sess=$(printf '%s' "$sess_doc" | jq -c '.sessions')
 assert_eq ".sessions is a JSON array" "array" "$(printf '%s' "$sess" | jq -r 'type')"
 
-# PRECONDITION: every assertion below uses all(...) or a filtered count, and
-# `jq 'all(...)'` on [] is *true*. Without this guard a collect_sessions that
-# always returns [] passes the entire task. Verified: `echo '[]' | jq
-# 'all(has("pid"))'` -> true.
+# PRECONDITION: `all(...)` on [] is true; an always-empty collector would pass everything below.
 n_sess=$(printf '%s' "$sess" | jq 'length')
 if (( n_sess == 0 )); then
     printf '  SKIP no live agent sessions on this host — session shape unverified here.\n'
@@ -180,10 +168,7 @@ assert_eq "every entry has required keys" "true" \
   "$(printf '%s' "$sess" | jq 'all(has("pid") and has("cwd") and has("repo_id") and has("branch") and has("idle_seconds") and has("agent") and has("root") and has("tty"))')"
 assert_eq "idle is number or null" "true" \
   "$(printf '%s' "$sess" | jq 'all(.idle_seconds == null or (.idle_seconds|type) == "number")')"
-# Root resolution check: git rev-parse --show-toplevel must resolve subdirectories.
-# Count sessions where root != cwd and root != "". If any exist, assert they start
-# with the root. If none exist, print SKIP — we have no subdirectory sessions to
-# validate the git resolution actually worked.
+# Subdirectory sessions must resolve to their repo root.
 n_subdir=$(printf '%s' "$sess" | jq '[.[] | select(.root != .cwd and .root != "")] | length')
 if (( n_subdir > 0 )); then
     assert_eq "subdirectory sessions resolve to parent root" "true" \
@@ -194,9 +179,6 @@ else
     printf '       is unexercised. To exercise this path, start an agent in a subdirectory\n'
     printf '       of a git repo (not the root) and re-run.\n'
 fi
-# `all(select(...))` over zero matching elements is TRUE, so this assertion is
-# vacuous on a machine running only Claude sessions. Report that honestly
-# instead of banking a free pass.
 n_other=$(printf '%s' "$sess" | jq '[.[] | select(.agent != "claude")] | length')
 if (( n_other > 0 )); then
     assert_eq "non-claude agents have null idle" "true" \
@@ -212,8 +194,6 @@ fi
 # since the two are computed at different moments.
 n_claude_idle=$(printf '%s' "$sess" | jq '[.[] | select(.agent == "claude" and .idle_seconds != null)] | length')
 if (( n_claude_idle > 0 )); then
-    # For each claude session with idle_seconds, recompute idle from last_conversation_ts
-    # and verify the stored value is within a few seconds.
     # Key by pid (unique per session) not cwd (can be shared by multiple sessions).
     check_idle=$(printf '%s' "$sess" | jq -r '.[] | select(.agent == "claude" and .idle_seconds != null) | [.pid, .cwd] | @tsv' | while read pid cwd; do
         now=$(date -u +%s)
@@ -224,7 +204,6 @@ if (( n_claude_idle > 0 )); then
                 recomputed_idle=$(( now - epoch ))
                 stored_idle=$(printf '%s' "$sess" | jq -r ".[] | select(.pid == $pid) | .idle_seconds")
                 diff=$(( stored_idle - recomputed_idle ))
-                # Allow 5-second tolerance for drift between collection time and recomputation
                 if (( diff < -5 || diff > 5 )); then
                     printf 'false'
                     break
@@ -245,15 +224,8 @@ else
 fi
 fi
 
-# Session discovery must have an error channel. A broken pgrep, a
-# missing pgrep and a failing lsof each produce an empty session list, which is
-# indistinguishable from "no agents are running" — every item renders
-# `○ no session` and Stale shows 0. These assertions cover rule 1 (no pgrep),
-# rule 2 (pgrep exit >1), rule 3 (pids found, no cwds resolved) and the healthy
-# case. Each stub shadows exactly one tool on PATH so the rest of the collector
-# runs for real. Every probe dispatches collect_sessions as a bare command under
-# `set -euo pipefail`, not inside a command substitution: that is the form that
-# catches an abort.
+# Error-channel rules 1–3 plus the healthy case. Each stub shadows one tool;
+# probes run bare under set -euo pipefail to catch an abort.
 host_sess_err="$(printf '%s' "$sess_doc" | jq -r '.errors.sessions // "null"')"
 if [[ "$host_sess_err" == *"not found"* ]]; then
     printf '  SKIP host lacks a session-discovery tool (%s)\n' "$host_sess_err"
@@ -328,12 +300,7 @@ assert_contains "wholesale lsof failure is reported" "resolved no working direct
 assert_eq "wholesale lsof failure still yields a valid empty session list" "0" \
   "$(printf '%s' "$sess_nolsof" | jq '.sessions | length')"
 
-# Rule 3, the other side: a per-pid lsof miss is a RACE (the process exited
-# mid-scan), not a fault, so it must be skipped silently while the surviving
-# session is still captured. Only a wholesale failure is reported. Without this
-# assertion the race-vs-fault distinction — a deliberate design decision — has
-# no test, and a future change could start reporting an error on every scan
-# that happens to catch an exiting process.
+# Rule 3, other side: a per-pid miss is skipped silently; the surviving session is kept.
 mixed_stub="$TMPHOME/mixed_stub"; mkdir -p "$mixed_stub"
 printf '#!/bin/sh\ncase "$*" in *claude*) echo 111; echo 222;; *) exit 1;; esac\n' \
   > "$mixed_stub/pgrep"
@@ -394,7 +361,7 @@ out=$("$BASH" -c 'set -u; OPEN_WORK_LIB=1 source "$1"; parse_glab_mrs review < "
 assert_eq "non-array rejected even without pipefail" 1 "$rc"
 assert_eq "non-array yields no items without pipefail" "" "$out"
 
-# --- collector behaviour, using stub CLIs on PATH (no network) ---
+# collector behaviour, using stub CLIs on PATH (no network)
 STUB="$TMPHOME/stubbin"; mkdir -p "$STUB"
 # gh: first call succeeds with exactly GH_LIMIT items (limit-reached), others fail
 cat > "$STUB/gh" <<'STUBEOF'
@@ -421,7 +388,6 @@ assert_eq "one failure does not suppress other queries" "100" "$(printf '%s' "$c
 assert_eq "limit-reached is marked" "true" "$(printf '%s' "$coll" | jq -r '.limits.github_authored // false')"
 assert_eq "identity lookup succeeded (no gitlab_review error)" "" "$(printf '%s' "$coll" | jq -r '.errors.gitlab_review // ""')"
 
-# --- collect() must actually combine both collectors (regression: it was never wired) ---
 agg=$(PATH="$STUB:$PATH" HOME="$REAL_HOME" collect)
 assert_eq "collect emits its four keys" "true" \
   "$(printf '%s' "$agg" | jq 'has("sessions") and has("items") and has("errors") and has("limits")')"
@@ -429,21 +395,14 @@ assert_eq "test_no_profile_key" "false" "$(printf '%s' "$agg" | jq 'has("profile
 assert_eq "collect carries items through" "100" "$(printf '%s' "$agg" | jq '.items | length')"
 assert_eq "collect carries sessions through (array)" "array" "$(printf '%s' "$agg" | jq -r '.sessions | type')"
 
-# collect() must fold collect_sessions' error map into the
-# document's single flat .errors, or the new channel never reaches the renderer
-# and the session error is invisible. `sessions` cannot collide with the seven
-# <forge>_<bucket> keys, so a plain `+` is the whole merge.
 agg_err=$(PATH="$pgrep_stub:$STUB:$PATH" HOME="$REAL_HOME" collect)
 assert_contains "collect merges session errors into .errors" "pgrep failed" \
   "$(printf '%s' "$agg_err" | jq -r '.errors.sessions // ""')"
 assert_contains "merged .errors still carries forge errors alongside" "401" \
   "$(printf '%s' "$agg_err" | jq -r '.errors.github_review // ""')"
 
-# Regression: /user identity lookup must capture both stdout and stderr separately.
-# Real glab returns structured errors in the JSON body (stdout) with only a terse
-# summary on stderr. The fix captures them separately so jq parses only the body,
-# and error messages include both. The stub body has unique text (insufficient_scope)
-# not present in stderr, to verify the body was actually captured.
+# The /user error must carry both the JSON body and the stderr summary. The stub
+# body's unique text (insufficient_scope) proves the body was captured.
 STUB2="$TMPHOME/stubbin2"; mkdir -p "$STUB2"
 cat > "$STUB2/gh" <<'STUBEOF'
 #!/usr/bin/env bash
@@ -464,10 +423,7 @@ coll=$(PATH="$STUB2:$PATH" collect_items)
 assert_contains "identity lookup captures unique body text" "insufficient_scope" "$(printf '%s' "$coll" | jq -r '.errors.gitlab_review // ""')"
 assert_contains "identity lookup includes stderr summary" "401 Unauthorized" "$(printf '%s' "$coll" | jq -r '.errors.gitlab_review // ""')"
 
-# Regression: _try must capture stdout/stderr separately. A CLI that succeeds (exit 0, valid
-# JSON array) but writes a deprecation notice to stderr must not corrupt the payload.
-# Before the fix, stderr was merged into the payload, jq would fail on the corrupted JSON,
-# and a successful query would be recorded as an error.
+# A stderr notice on a successful call must not corrupt the payload.
 STUB3="$TMPHOME/stubbin3"; mkdir -p "$STUB3"
 cat > "$STUB3/gh" <<'STUBEOF'
 #!/usr/bin/env bash
@@ -486,12 +442,9 @@ coll=$(PATH="$STUB3:$PATH" collect_items)
 assert_eq "success with stderr notice parses items" "3" "$(printf '%s' "$coll" | jq '.items | length')"
 assert_eq "success with stderr notice has no errors" "0" "$(printf '%s' "$coll" | jq '.errors | length')"
 
-# _try must report a failed forge call regardless of how its caller
-# dispatches collect_items. A bare `payload="$(cmd)"` aborts under set -e, so
-# before this fix the error path survived only because collect_items happens to
-# be called inside a command substitution in collect(). Dispatch it with a
-# redirect instead — that is the form that catches a regression here, and it
-# discriminates under both bash 3.2 and 5.3.
+# _try must report a failed forge call regardless of how collect_items is
+# dispatched. A redirect, not a command substitution, is the form that catches
+# a set -e abort, under both bash 3.2 and 5.3.
 errexit_stub="$TMPHOME/errexit_stub"; mkdir -p "$errexit_stub"
 for c in gh glab; do
   printf '#!/bin/sh\necho "stub failure" >&2\nexit 1\n' > "$errexit_stub/$c"
@@ -512,7 +465,7 @@ assert_eq "_try reports errors under strict mode with a redirect dispatch" "7" \
 assert_eq "_try returns no items when every forge call fails" "0" \
   "$(jq -r '.items | length' < "$errexit_out" 2>/dev/null || echo MISSING)"
 
-# --- gh pr view branch resolution, cap, and degrade-never-fail ---
+# gh pr view branch resolution, cap, and degrade-never-fail
 # 2 review PRs (101,102) + 30 authored PRs (1..30) + 1 assigned issue (501) = 33
 # items, 32 of them PRs. GH_PR_BRANCH_LOOKUP_CAP=25 means only the first 25 PRs
 # in emission order (101,102,1..23) are attempted; number 5 is made to fail
@@ -613,17 +566,8 @@ out=$("$BASH" "$SCRIPT" --from-json "$fix")
 assert_eq "dedups the authored/assigned duplicate" "4" "$(printf '%s' "$out" | jq '.items | length')"
 assert_eq "dedup keeps the higher-priority bucket" "authored" \
   "$(printf '%s' "$out" | jq -r '.items[] | select(.id=="100") | .bucket')"
-# Regression test for the reported defect: item 200 has a null branch (GitHub
-# search cannot return one) and a session sits in its repo on "main" — but that
-# session is not shown to be working on THIS item, only on the repo. Before
-# the fix, `$i.branch == null` in the status rule matched this unconditionally
-# and returned "session"; a GitHub issue's session marker claimed in-flight work
-# that was never verified against a branch.
 assert_eq "null-branch item with a repo session -> session-repo-only (regression)" "session-repo-only" \
   "$(printf '%s' "$out" | jq -r '.items[] | select(.id=="200") | .status')"
-# Two axes now: status says whether a session matched, session_state says how
-# idle it is. An earlier draft collapsed them, which made a live session with an
-# unresolvable transcript report as "stale".
 assert_eq "stale session still matches" "session" \
   "$(printf '%s' "$out" | jq -r '.items[] | select(.id=="300") | .status')"
 assert_eq "stale session state is stale" "stale" \
@@ -633,8 +577,6 @@ assert_eq "active session state is active" "active" \
 assert_eq "unmatched item has null session_state" "null" \
   "$(printf '%s' "$out" | jq -r '.items[] | select(.id=="400") | .session_state')"
 
-# A live Claude session whose transcript cannot be resolved must NOT read as
-# stale — it is live with unknown idle. This fixture is the regression.
 fix_unk="$TMPHOME/shape_unknown.json"
 cat > "$fix_unk" <<'JSON'
 {
@@ -660,15 +602,12 @@ assert_eq "null idle is unknown, never active" "unknown" \
   "$(printf '%s' "$out" | jq -r '.sessions[] | select(.pid==3) | .state')"
 assert_eq "errors survive shaping" "HTTP 401 unauthorized" \
   "$(printf '%s' "$out" | jq -r '.errors.gitlab_issues')"
-# Assert the order SHAPE EMITTED. The earlier version applied sort_by() to the
-# output itself before checking, so it passed even when shape did no ordering.
+# Assert the order shape emitted; never re-sort before checking.
 assert_eq "items emitted oldest-first" "400,300,100,200" \
   "$(printf '%s' "$out" | jq -r '[.items[].id] | join(",")')"
 assert_eq "unmatched sessions listed" "1" \
   "$(printf '%s' "$out" | jq '[.sessions[] | select(.matched == false)] | length')"
 
-# A non-Claude session in a MATCHING repo must never join. The original
-# fixture put the opencode session in a non-matching repo, so the bug passed.
 fix2="$TMPHOME/shape_a7.json"
 cat > "$fix2" <<'JSON'
 {
@@ -683,7 +622,6 @@ out2=$("$BASH" "$SCRIPT" --from-json "$fix2")
 assert_eq "non-claude session never joins" "no-session" "$(printf '%s' "$out2" | jq -r '.items[0].status')"
 assert_eq "non-claude session yields no matches" "0" "$(printf '%s' "$out2" | jq '.items[0].matches | length')"
 
-# session-other-branch is a public status with no previous coverage.
 fix3="$TMPHOME/shape_branch.json"
 cat > "$fix3" <<'JSON'
 {
@@ -703,10 +641,6 @@ assert_eq "branch mismatch -> session-other-branch" "session-other-branch" \
 assert_eq "null branch with a repo session -> session-repo-only, not session" "session-repo-only" \
   "$(printf '%s' "$out3" | jq -r '.items[] | select(.id=="911") | .status')"
 
-# Amplification case from the live run, stated as an assertion: one session
-# sitting in a repo must not light up EVERY null-branch item in that repo as
-# "session". Three GitHub issues in example-user/widget all rendered "session"
-# from a single unrelated session on main — this is that scenario, reduced.
 fix_repo_only="$TMPHOME/shape_repo_only.json"
 cat > "$fix_repo_only" <<'JSON'
 {
@@ -731,8 +665,6 @@ assert_eq "none of the three amplify to session" "0" \
 assert_eq "session_state still populates for a session-repo-only item" "active" \
   "$(printf '%s' "$out_repo_only" | jq -r '.items[0].session_state')"
 
-# Negative case: the new clause must not swallow a genuinely absent session.
-# A null-branch item with no session anywhere in its repo is still "no-session".
 fix_repo_only_absent="$TMPHOME/shape_repo_only_absent.json"
 cat > "$fix_repo_only_absent" <<'JSON'
 {
@@ -747,7 +679,6 @@ out_repo_only_absent=$("$BASH" "$SCRIPT" --from-json "$fix_repo_only_absent")
 assert_eq "null-branch item with no session in its repo is still no-session" "no-session" \
   "$(printf '%s' "$out_repo_only_absent" | jq -r '.items[0].status')"
 
-# Matched sessions must be freshest-first, not merely active-first.
 fix4="$TMPHOME/shape_order.json"
 cat > "$fix4" <<'JSON'
 {
@@ -767,12 +698,8 @@ assert_eq "parser repo_id agrees with normalize_repo_id" \
   "$(normalize_repo_id 'https://gitlab.com/example-org/group-a/subgroup-b/repo-three.git')" \
   "$(printf '%s' "$(parse_glab_mrs authored < "$glab_fixture")" | jq -r '.[0].repo_id')"
 
-# normalize_repo_id strips a host port; the jq path used to keep it, so
-# an item on a self-hosted forge with a non-default port could never join a
-# session in its local clone. Compare the two paths' output directly rather than
-# hard-coding either side, so the assertion fails if either one drifts. The
-# parser-agreement assertion above is the negative control: it uses a portless gitlab.com URL, so
-# it goes red if the new strip ever mangles an ordinary host.
+# Compare against normalize_repo_id, not a literal, so drift on either side
+# fails; the portless case above is the negative control.
 port_fixture="$TMPHOME/glab_port.json"
 cat > "$port_fixture" <<'JSON'
 [{"id":77,"iid":3,"title":"self-hosted with a port","created_at":"2026-08-28T15:22:12Z",
@@ -794,10 +721,6 @@ assert_eq "issues parser and normalize_repo_id agree on a port-bearing host" \
   "$(normalize_repo_id 'https://gl.example.com:8443/group/repo.git')" \
   "$(parse_glab_issues assigned < "$port_issue_fixture" | jq -r '.[0].repo_id')"
 
-# Match ordering's PRIMARY key (state_rank) is never exercised.
-# shape_order.json gives both matches active state, so only idle_seconds is tested.
-# Add a fixture with one active and one stale match on the same item,
-# assert the active one (state_rank=0) comes first.
 fix_mixed_state="$TMPHOME/shape_mixed_state.json"
 cat > "$fix_mixed_state" <<'JSON'
 {
@@ -816,9 +739,6 @@ assert_eq "match ordering: active before stale" "101,102" \
 assert_eq "session_state from active match" "active" \
   "$(printf '%s' "$out_mixed" | jq -r '.items[0].session_state')"
 
-# Dedup priority is two-thirds untested.
-# Only authored > assigned is asserted. review (rank 0) is never tested.
-# Add a fixture where same {forge, host, id} appears as review, authored, and assigned.
 fix_all_buckets="$TMPHOME/shape_all_buckets.json"
 cat > "$fix_all_buckets" <<'JSON'
 {
@@ -838,11 +758,8 @@ out_buckets=$("$BASH" "$SCRIPT" --from-json "$fix_all_buckets")
 assert_eq "dedup: review > authored" "review" \
   "$(printf '%s' "$out_buckets" | jq -r '.items[0].bucket')"
 
-# Secondary and tertiary ordering keys are unexercised.
-# Items sort by created_at (primary), forge (secondary), id (tertiary).
-# Fixture ids chosen so dropping .forge (while keeping .id) reverses order
-# (id 950 gitlab < 951 github). This fixture cannot catch dropping BOTH keys —
-# group_by already imposes forge order here — so the forge tie-break test below covers that.
+# Ids chosen so dropping .forge reverses order (950 gitlab < 951 github);
+# dropping both keys is caught by the multi-host case below.
 fix_forge_order="$TMPHOME/shape_forge_order.json"
 cat > "$fix_forge_order" <<'JSON'
 {
@@ -880,8 +797,6 @@ out_multi_host=$("$BASH" "$SCRIPT" --from-json "$fix_multi_host")
 assert_eq "one forge across two hosts orders by id, not by host" "b.example,a.example" \
   "$(printf '%s' "$out_multi_host" | jq -r '[.items[].host] | join(",")')"
 
-# Matches break ties on pid when state and idle_seconds match.
-# Add two matches with same state and idle_seconds, assert order by pid.
 fix_pid_order="$TMPHOME/shape_pid_order.json"
 cat > "$fix_pid_order" <<'JSON'
 {
@@ -898,9 +813,6 @@ out_pid=$("$BASH" "$SCRIPT" --from-json "$fix_pid_order")
 assert_eq "matches ordered by pid on state/idle tie" "200,201" \
   "$(printf '%s' "$out_pid" | jq -r '[.items[0].matches[].pid] | join(",")')"
 
-# Stale boundary untested.
-# idle_seconds > 3 days is stale. Test exactly at threshold (3 * 86400 = 259200).
-# Should be active (< stale threshold), not stale.
 fix_boundary="$TMPHOME/shape_boundary.json"
 cat > "$fix_boundary" <<'JSON'
 {
@@ -928,9 +840,7 @@ cat > "$RSTUB/gh" <<'STUBEOF'
 echo "gh $*" >> "$ARGV_LOG"
 for a in "$@"; do printf 'ARG=[%s]\n' "$a" >> "$ARGV_LOG"; done
 if [[ "$*" == *"pr view"* ]]; then echo "feature-branch"; exit 0; fi
-# The review search MUST return an item. With an empty result `gh_pr_total` is 0
-# and the head-branch-resolution loop never runs, so Step 5 could not observe
-# whether --reviews-only wrongly suppressed it.
+# Must return an item, or the branch-resolution loop never runs and can't be observed.
 if [[ "$*" == *"user-review-requested"* ]]; then
   echo '[{"number":1,"id":"PR1","title":"t","createdAt":"2026-01-01T00:00:00Z","repository":{"nameWithOwner":"o/r"},"url":"https://github.com/o/r/pull/1","isDraft":false}]'
   exit 0
@@ -974,7 +884,7 @@ assert_not_contains "entry point forwards --reviews-only (suppression reaches co
 assert_contains "entry point still runs the review query" \
   "user-review-requested:@me" "$e2e_log"
 
-# Review Focus 3: gitlab_review interpolates $uid. If /user fails, the error must
+# gitlab_review interpolates $uid. If /user fails, the error must
 # still surface -- and with five requests suppressed it is now a much larger
 # share of the result, so rendering it as emptiness would hide most of the run.
 IDSTUB="$TMPHOME/idfail_stub"; mkdir -p "$IDSTUB"
@@ -1001,7 +911,7 @@ assert_contains "identity failure reported under --reviews-only" "401" \
 assert_eq "identity failure keeps the other forge's items and fabricates none" "1" \
   "$(printf '%s' "$idfail" | jq '.items | length')"
 
-# Review Focus 4: _try's truncation check is per-key, so it must still fire when
+# _try's truncation check is per-key, so it must still fire when
 # only two requests run. A reader seeing 100 items has no way to know more exist.
 LIMSTUB="$TMPHOME/limit_stub"; mkdir -p "$LIMSTUB"
 cat > "$LIMSTUB/gh" <<'STUBEOF'
@@ -1021,8 +931,6 @@ assert_eq "truncation flagged under --reviews-only" "true" \
   "$(printf '%s' "$limout" | jq -r '.limits.github_review // false')"
 
 
-# --exclude-reviewed: the GitHub term must be its own argv entry. `gh` quotes a
-# multi-term positional as one term and the API rejects it while exiting 0.
 : > "$RLOG"
 xr_out=$(PATH="$RSTUB:$PATH" ARGV_LOG="$RLOG" collect_items 1 1)
 xr_log=$(cat "$RLOG")
@@ -1046,7 +954,6 @@ issues_line=$(printf '%s\n' "$full_log" | grep '^gh search issues')
 assert_contains "issues query actually ran" "--json" "$issues_line"
 assert_not_contains "gh search issues never requests isDraft" "isDraft" "$issues_line"
 
-# Review Focus 1: the flags are independent. Each must work alone and together.
 : > "$RLOG"
 solo=$(PATH="$RSTUB:$PATH" ARGV_LOG="$RLOG" "$BASH" -c \
   'OPEN_WORK_LIB=1 source "$1"; collect_items "" 1 >/dev/null' _ "$SCRIPT" 2>&1; cat "$RLOG")
@@ -1083,7 +990,6 @@ assert_eq "emitted document keeps is_bot value" "true" "$(printf '%s' "$out_doc"
 assert_eq "emitted document keeps url value" "https://github.com/o/r/pull/9" \
   "$(printf '%s' "$out_doc" | jq -r '.items[0].url')"
 
-# url, is_draft, author, is_bot on every parser.
 gh_pr_fix="$TMPHOME/gh_pr_fields.json"
 cat > "$gh_pr_fix" <<'JSON'
 [{"number":7,"id":"PR7","title":"add thing","createdAt":"2026-02-01T00:00:00Z",

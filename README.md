@@ -81,35 +81,14 @@ Or copy the folders in `skills/` into your harness's skills directory.
 
 - `git` and `jq`.
 - `gh` and/or `glab`, optional, for the PR/MR/issue skills.
-- Optional reviewer CLIs for `outside-voice`: `claude`, `gemini`, `codex`, `opencode`, `kiro-cli`, and `glab` for the `duo` target (runs `glab duo cli`). `opencode` runs under an inline agent that denies edits and shell, so local OpenCode permission rules do not apply to the review.
+- Optional reviewer CLIs for `outside-voice`: `claude`, `gemini`, `codex`, `opencode`, `kiro-cli`, and `glab` for the `duo` target (runs `glab duo cli`).
 - The superpowers plugin, for `spec-and-plan`.
 
 ## Configuration
 
-`outside-voice` (flags override env vars):
+`outside-voice` env vars (flags override them) are listed under Configuration in `skills/outside-voice/SKILL.md`.
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `OUTSIDE_VOICE_TIMEOUT` | `180` | Per-target timeout in seconds (`--timeout` wins) |
-| `OUTSIDE_VOICE_OUTPUT_CAP` | `800` | Max reviewer output lines shown per target |
-| `OUTSIDE_VOICE_DIFF_CAP` | `2000` | Max diff lines sent to reviewers |
-| `OUTSIDE_VOICE_MODEL` | unset | Model passed as `--model` to kiro; literal, beats policy `review_model` (empty = unset) |
-| `OUTSIDE_VOICE_EFFORT` | unset | Effort passed as `--effort` to kiro when supported; literal, beats policy `review_effort` (empty = unset) |
-
-`task-estimate` reads `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (cache: `${XDG_CACHE_HOME:-~/.cache}/scuba10steve-skills/task-estimate/`). The config file is written with defaults on first run (when the directory is writable) and has flat top-level keys:
-
-```json
-{
-  "buckets": {"s": 15000, "m": 40000, "l": 75000},
-  "session_cap": 100000,
-  "verbs": {"refactor|migrate|audit|investigate|overhaul": 3.0, "...": "..."},
-  "scope_adverbs": {"everywhere|across|all of|repo-wide|entire|everything": 2.0, "...": "..."},
-  "phase_split": {"read": 0.4, "plan": 0.15, "edit": 0.3, "verify": 0.15},
-  "multi_agent": {"per_agent_base": 28000, "verb_to_agents": {"...": 4}, "default_agents": 1}
-}
-```
-
-Your file is deep-merged over the defaults in memory on every run: your values win, and any key you omit, at any depth, uses the default. The file itself is never rewritten. If the directory is not writable, the defaults are used without writing anything.
+`task-estimate` reads `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/task-estimate.json` (cache: `${XDG_CACHE_HOME:-~/.cache}/scuba10steve-skills/task-estimate/`); keys and merge rules are in `skills/task-estimate/SKILL.md`, Step 1.
 
 `"providers": {"planning"|"bulk_edit"|"verify": "<harness name>"}` is optional; the labels are shown on split prompts.
 
@@ -146,7 +125,7 @@ A literal `review_model=<id>` pins the model; unset passes no `--model`.
 
 `review_targets` is a comma list of `claude`, `gemini`, `codex`, `opencode`, `kiro`, `duo`. Unknown names and duplicates are dropped, names whose CLI is not installed are skipped, and `all` is not accepted. It applies only when the user named no targets. One resolved target runs alone; two or more follow `multi_target`.
 
-Exception: if the user named no targets and every target about to run matches the caller's own provider (`claude`, `codex`, `gemini`, `duo`; `kiro` and `opencode` never match), the skill asks before dispatching, since the review would not be independent. In `outside-voice` that only happens when `review_targets` is set (so a policy file exists); the only change without a policy file is the `spec-and-plan` gate's default single-target proposal. Explicitly named targets dispatch as before.
+The same-provider exception (asking before every unnamed target matches the caller's own provider) is described in `skills/outside-voice/SKILL.md` and `skills/spec-and-plan/SKILL.md`.
 
 ## Name collisions
 
