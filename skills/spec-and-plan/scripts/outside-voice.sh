@@ -401,7 +401,9 @@ run_with_timeout() {
 #            (chat type is required: headless otherwise routes to the registry
 #            Developer flow and drops the flow config. Read-only toolset
 #            live-confirmed on Duo CLI 9.6.0 against GitLab 19.7. Stdin is not
-#            read; needs a GitLab project or a default Duo namespace.
+#            read; needs a GitLab project or a default Duo namespace. The
+#            client sends the flow unconditionally; server-side binding was
+#            verified on GitLab 19.7 only.
 #            timeout+SIGKILL still degrades a hang cleanly)
 kiro_supports_effort() { kiro-cli chat --help 2>/dev/null | grep -q -- '--effort'; }
 
