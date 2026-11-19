@@ -8,22 +8,21 @@ description: Dispatch the current work to a DIFFERENT AI harness for a read-only
 Dispatch the current work to another harness for a read-only review.
 
 "Read-only" is enforced by the script only where the target CLI offers a
-switch: `kiro` runs with `--trust-tools=fs_read`, `opencode` runs under an
-inline `outside-voice-reviewer` agent that denies edits and shell regardless
-of the user's own OpenCode permission rules, and `duo` runs a `chat` workflow
-under an inline flow config whose agent toolset is restricted to the local read
-tools `list_dir`, `read_file`, `read_files`, `find_files`, and `grep`, bound by
-GitLab's workflow service, so headless auto-approval has no write, shell, or git
-tool to approve. GitLab's service may add its own read-only tools alongside those
-five. The binding is verified only against GitLab 19.7 (service capability
-`inline_flow_config_binding`). The client always sends the flow, but an older
-self-managed instance that does not bind inline flows falls back to Duo's default
-chat tools with headless auto-approval, so on instances older than 19.7 treat
-`duo` as unrestricted or leave it out of `review_targets`. Headless Duo needs the
-current repo to be a GitLab project or a default Duo namespace configured on your
-GitLab profile; otherwise the target fails with
-`No default namespace found`. Every other target relies on the prompt and on that
-CLI's own headless defaults.
+switch; every other target relies on the prompt and on that CLI's own headless
+defaults.
+
+- `kiro`: `--trust-tools=fs_read`.
+- `opencode`: an inline `outside-voice-reviewer` agent that denies edits and
+  shell, regardless of your own OpenCode permission rules.
+- `duo`: a `chat` workflow under an inline flow config whose agent has only the
+  local read tools `list_dir`, `read_file`, `read_files`, `find_files`, and
+  `grep` (GitLab's service may add its own read-only tools), so headless
+  auto-approval has no write, shell, or git tool to approve. An instance whose
+  service does not bind inline flows (capability `inline_flow_config_binding`)
+  runs Duo's default chat tools with auto-approval instead, so there treat
+  `duo` as unrestricted or drop it from `review_targets`. Headless
+  Duo also needs a GitLab project or a default Duo namespace, else it fails with
+  `No default namespace found`.
 
 ## Args
 
