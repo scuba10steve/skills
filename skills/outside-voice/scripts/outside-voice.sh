@@ -398,13 +398,10 @@ run_with_timeout() {
 #   opencode positional arg + `--agent` (2.3.0: inline agent resolves live; deny
 #            enforcement unverified live, no reachable provider; SIGKILL-protected)
 #   duo      `run --workflow-type chat --flow-config <inline json> --goal <prompt>`
-#            (chat type is required: headless otherwise routes to the registry
-#            Developer flow and drops the flow config. Read-only toolset
-#            live-confirmed on Duo CLI 9.6.0 against GitLab 19.7. Stdin is not
-#            read; needs a GitLab project or a default Duo namespace. The
-#            client sends the flow unconditionally; server-side binding was
-#            verified on GitLab 19.7 only.
-#            timeout+SIGKILL still degrades a hang cleanly)
+#            (chat type required: headless otherwise takes the registry Developer
+#            flow and drops the flow config; client always sends the flow, toolset
+#            binding live-confirmed on Duo CLI 9.6.0 / GitLab 19.7 only; stdin not
+#            read; needs a GitLab project or default Duo namespace; SIGKILL-protected)
 kiro_supports_effort() { kiro-cli chat --help 2>/dev/null | grep -q -- '--effort'; }
 
 OPENCODE_REVIEWER_AGENT=outside-voice-reviewer
