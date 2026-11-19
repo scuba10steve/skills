@@ -8,10 +8,17 @@ description: Dispatch the current work to a DIFFERENT AI harness for a read-only
 Dispatch the current work to another harness for a read-only review.
 
 "Read-only" is enforced by the script only where the target CLI offers a
-switch: `kiro` runs with `--trust-tools=fs_read`, and `opencode` runs under an
+switch: `kiro` runs with `--trust-tools=fs_read`, `opencode` runs under an
 inline `outside-voice-reviewer` agent that denies edits and shell regardless
-of the user's own OpenCode permission rules. Every other target relies on the
-prompt and on that CLI's own headless defaults.
+of the user's own OpenCode permission rules, and `duo` runs a `chat` workflow
+under an inline flow config whose agent toolset is restricted to the local read
+tools `list_dir`, `read_file`, `read_files`, `find_files`, and `grep`, bound by
+GitLab's workflow service, so headless auto-approval has nothing to approve.
+GitLab's service may add its own read-only tools alongside those five. Headless
+Duo needs the current repo to be a GitLab project or a default Duo namespace
+configured on your GitLab profile; otherwise the target fails with `No default
+namespace found`. Every other target relies on the prompt and on that CLI's own
+headless defaults.
 
 ## Args
 
