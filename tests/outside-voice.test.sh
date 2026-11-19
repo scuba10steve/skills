@@ -33,17 +33,12 @@ export PATH="$STUBDIR:$PATH"
 # Source the script in library mode (no main) to test functions directly.
 OUTSIDE_VOICE_LIB=1 source "$SCRIPT"
 
-# resolve_targets: single
 assert_eq "resolve single" "claude" "$(resolve_targets claude)"
 # resolve_targets: comma list keeps priority order regardless of input order
 assert_eq "resolve comma order" $'claude\ngemini' "$(resolve_targets gemini,claude)"
-# resolve_targets: all expands to full installed order
 assert_eq "resolve all" $'claude\ngemini\ncodex\nopencode\nkiro\nduo' "$(resolve_targets all)"
-# resolve_targets: unknown returns nonzero
 resolve_targets bogus >/dev/null 2>&1; assert_eq "resolve unknown rc" "2" "$?"
-# spaced comma list is trimmed
 assert_eq "resolve spaced list" $'claude\ngemini' "$(resolve_targets 'claude, gemini')"
-# duplicate names de-dupe to a single run
 assert_eq "resolve dedupe" "claude" "$(resolve_targets claude,claude)"
 
 unset OUTSIDE_VOICE_TIMEOUT OUTSIDE_VOICE_OUTPUT_CAP OUTSIDE_VOICE_DIFF_CAP OUTSIDE_VOICE_MODEL OUTSIDE_VOICE_EFFORT
@@ -116,7 +111,7 @@ target_providers bogus >/dev/null 2>&1; assert_eq "providers unknown rc" "1" "$?
 assert_eq "providers kiro is multi" "yes" \
     "$([[ "$(target_providers kiro | wc -l | tr -d ' ')" -gt 1 ]] && echo yes || echo no)"
 
-# No model unless OUTSIDE_VOICE_MODEL is set, and then only for kiro.
+# Without a policy file: no model unless OUTSIDE_VOICE_MODEL is set, and only for kiro.
 assert_eq "reviewer model unset by default" "" "$(reviewer_model kiro anthropic)"
 assert_eq "reviewer model env kiro" "foo" "$(OUTSIDE_VOICE_MODEL=foo reviewer_model kiro anthropic)"
 for t in claude codex gemini duo opencode; do
@@ -164,9 +159,8 @@ TMPCLEAN="$(mktemp -d)"; ( cd "$TMPCLEAN"
 rm -rf "$TMPCLEAN"
 
 # --- base-ref resolution: committed work must be in review scope ------------
-# Feature branch in a master-default repo. The old code required a *local*
-# branch literally named `main`; without one it diffed only the working tree,
-# so every committed change was invisible to the reviewer.
+# Feature branch in a master-default repo with no local main: committed work
+# must still be in scope.
 TMPMASTER="$(mktemp -d)"; ( cd "$TMPMASTER"
     git init -q; git symbolic-ref HEAD refs/heads/master
     git config user.email t@e; git config user.name t
@@ -264,6 +258,13 @@ single="$(cd "$TR" && bash "$SCRIPT" claude "review")"
 assert_contains "single runs" "REVIEW-FROM-claude" "$single"
 assert_contains "single framed" "═══ claude ═══" "$single"
 
+printf '#!/usr/bin/env bash\necho "ARGS:$*"\necho "CFG:${OPENCODE_CONFIG_CONTENT:-}"\n' > "$STUBDIR/opencode"
+oc="$(run_target opencode "review" 30 2>/dev/null)"
+assert_contains "opencode gets restricted agent" "ARGS:run --agent outside-voice-reviewer review" "$oc"
+assert_contains "opencode agent denies edits" '{"action":"edit","resource":"*","effect":"deny"}' "$oc"
+assert_contains "opencode agent denies shell" '{"action":"shell","resource":"*","effect":"deny"}' "$oc"
+printf '#!/usr/bin/env bash\necho "REVIEW-FROM-opencode"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/opencode"
+
 # Multi target without --yes shows preview and does NOT run.
 preview="$(cd "$TR" && bash "$SCRIPT" claude,gemini "review")"
 assert_contains "preview count" "2 paid reviewer runs" "$preview"
@@ -317,10 +318,8 @@ assert_contains "batch continues after timeout" "REVIEW-FROM-gemini" "$tob"
 printf '#!/usr/bin/env bash\necho "REVIEW-FROM-claude"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/claude"; chmod +x "$STUBDIR/claude"
 
 # --- model selection reaches the command line ------------------------------
-# Every invocation below redirects </dev/null. No existing test runs kiro, and
-# unlike the claude branch (which pipes the prompt to stdin) the kiro branch
-# passes it positionally — so the stub's `cat` has no producer and would read
-# the terminal, hanging until the timeout kills it.
+# Redirect </dev/null: kiro takes the prompt positionally, so the stub's cat
+# would otherwise block on the terminal.
 # The stub advertises --effort in its help text, like current kiro-cli builds.
 printf '#!/usr/bin/env bash\nif [[ "$*" == *--help* ]]; then echo "      --effort <EFFORT>"; exit 0; fi\necho "ARGV: $*"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/kiro-cli"
 chmod +x "$STUBDIR/kiro-cli"
@@ -336,7 +335,7 @@ printf '#!/usr/bin/env bash\nif [[ "$*" == *--help* ]]; then echo "      --model
 mko="$(cd "$TR" && OUTSIDE_VOICE_MODEL=foo OUTSIDE_VOICE_EFFORT=high bash "$SCRIPT" kiro "review" </dev/null)"
 assert_eq "no effort when kiro-cli lacks it" "0" "$(printf '%s' "$mko" | grep -c -- '--effort' | tr -d ' ')"
 assert_contains "old kiro-cli still gets model flag" "--model foo" "$mko"
-# The pre-feature flags are still present in both cases.
+# Base kiro flags survive model/effort selection.
 assert_contains "kiro keeps trust-tools" "--trust-tools=fs_read" "$mk"
 assert_contains "kiro keeps no-interactive" "--no-interactive" "$mkp"
 
@@ -501,7 +500,7 @@ assert_eq "exact file plus dir does not sweep ignored" 'docs/spec.md|' \
 assert_eq "no paths yields nothing" "" "$(uc)"
 assert_eq "no paths is silent" "" "$( ( cd "$TMPUT"; PATHS=(); untracked_candidates ) 2>&1 >/dev/null )"
 
-# gather_context now surfaces an explicitly passed ignored artifact.
+# gather_context includes an explicitly passed ignored artifact.
 ctxi="$( cd "$TMPUT"; PATHS=(docs/spec.md); BASE_OVERRIDE=''; gather_context 2>/dev/null )"
 assert_contains "ignored artifact reaches context" "spec body" "$ctxi"
 # 7c. NUL-safety through the SNAPSHOT. The `newline path survives as one path`
@@ -570,9 +569,8 @@ TMPRG="$(mktemp -d)"; ( cd "$TMPRG"
     mkdir -p docs; echo 'ignored artifact body' > docs/spec.md
     echo 'stray' > stray.txt ) >/dev/null 2>&1
 
-# 4. With no paths, output is byte-identical to the two pre-existing diff
-#    sources alone. Reconstructed here rather than kept as a checked-in golden
-#    file, which would drift on any unrelated formatting change.
+# 4. With no paths, output equals the base...HEAD and HEAD diffs alone,
+#    rebuilt inline instead of kept as a golden file.
 # scoped_diff reads the CANDIDATES snapshot; set it explicitly here since we
 # bypass gather_context (and therefore snapshot_candidates).
 rg_actual="$( cd "$TMPRG"; PATHS=(); CANDIDATES=(); BASE_OVERRIDE=''; scoped_diff "" )"
@@ -616,7 +614,7 @@ esac
 rm -rf "$TMPAN"
 
 
-# --- removed profile flag, target availability -----------------------------
+# --- --profile rejected, target availability -------------------------------
 pf_out="$(bash "$SCRIPT" --profile work claude "review" 2>&1)"; pf_rc=$?
 assert_eq "profile flag rejected exit 64" "64" "$pf_rc"
 assert_contains "profile flag named in error" "--profile" "$pf_out"

@@ -3,8 +3,7 @@
 # In library mode (sourced by the test harness) skip -e and do not dispatch.
 if [[ -z "${OPEN_WORK_LIB:-}" ]]; then set -euo pipefail; fi
 
-STALE_DAYS=3   # Hardcoded. No env override — an untested knob
-               # that silently changes classification is worse than no knob.
+STALE_DAYS=3   # No env override: an untested knob that silently changes classification is worse than none.
 
 open_work_usage() {
     cat <<'USAGE'
@@ -44,7 +43,7 @@ open_work_main() {
 normalize_repo_id() {
     local url="${1:-}" host path
     [[ -n "$url" ]] || { printf ''; return 0; }
-    while [[ "$url" == */ ]]; do url="${url%/}"; done  # strip trailing slashes
+    while [[ "$url" == */ ]]; do url="${url%/}"; done
     url="${url%.git}"
     case "$url" in
         https://*|http://*)
@@ -68,9 +67,7 @@ normalize_repo_id() {
     host="${host##*@}"   # drop any credentials
     host="${host%%:*}"   # drop any port
     if [[ -z "$path" || "$path" == "$url" ]]; then printf ''; return 0; fi
-    # Host is deliberately not case-folded: GitLab.COM/Group/Repo normalizes to GitLab.COM/Group/Repo.
-    # That is acceptable since real forge URLs are consistently lowercase, but it is undocumented.
-    # Path is not case-folded since repository paths are case-sensitive.
+    # Host is not case-folded (real forge hosts are lowercase); path is, correctly, case-sensitive.
     printf '%s/%s' "$host" "$path"
 }
 
@@ -85,17 +82,9 @@ last_conversation_ts() {
     [[ -d "$dir" ]] || return 1
     for f in "$dir"/*.jsonl; do
         [[ -f "$f" ]] || continue
-        # Malformed lines are skipped INSIDE jq via `fromjson?`, so jq exits 0
-        # and still emits the good timestamps. An earlier draft instead wrote
-        # `| tail -1) || t=""` with a plain jq filter -- but under pipefail one
-        # bad line made jq exit non-zero, and the guard then threw away
-        # timestamps jq had already produced, contradicting this task's own
-        # test. Verified: one good record followed by a malformed line returns
-        # the good timestamp with exit 0; only-untimestamped still returns 1.
-        # tail -n 800: bound against trailing untimestamped records (type=mode/system).
-        # If >800 untimestamped lines follow the last user/assistant turn, the
-        # bound prevents accessing it; the function returns non-zero (unknown).
-        # Worst observed in live transcripts: 10 trailing untimestamped lines (80× headroom).
+        # `fromjson?` skips malformed lines inside jq, so it exits 0 and keeps good
+        # timestamps. tail -n 800 bounds the scan; >800 trailing untimestamped
+        # records yields unknown (worst observed: 10).
         t=$(tail -n 800 "$f" 2>/dev/null \
             | jq -Rr 'fromjson? // empty
                       | select((.type=="user" or .type=="assistant") and .timestamp != null)
@@ -109,17 +98,9 @@ last_conversation_ts() {
     printf '%s' "$newest"
 }
 
-# collect_sessions -> {"sessions": [ ... ], "errors": { }}
-# The errors map is not decoration: a broken discovery tool and a machine with no
-# agents running both produce an empty sessions array, and the reader cannot tell
-# them apart. Every item would render `no session` and Stale would show 0 — a
-# failure rendered as emptiness, which is the one thing this tool must never do.
-# Only the key `sessions` is ever set here; it cannot collide with collect_items'
-# seven <forge>_<bucket> keys when the two maps are merged in collect().
+# collect_sessions -> {sessions, errors}. errors distinguishes failed discovery
+# from no agents running.
 collect_sessions() {
-    # Check the discovery tools (pgrep, lsof, ps) before anything else runs: without
-    # them there is nothing to discover, and the caller needs to be told rather than
-    # handed an empty list.
     if ! command -v pgrep >/dev/null 2>&1; then
         jq -nc '{sessions: [], errors: {sessions: "pgrep not found — session discovery unavailable"}}'
         return 0
@@ -136,9 +117,8 @@ collect_sessions() {
     local now ts idle repo_id
     local sess_err="" pgrep_rc pids n_pids=0 n_cwds=0 tmp_sess
     now=$(date -u +%s)
-    # Sessions accumulate in a file rather than a `{ ... } | jq -s` pipeline: a
-    # pipeline's left side runs in a subshell, so the counters and sess_err this
-    # function now needs would be discarded on exit from it.
+    # Accumulate in a file: a `{…} | jq -s` pipeline runs the loop in a subshell
+    # and loses the counters and sess_err.
     tmp_sess="$(mktemp "${TMPDIR:-/tmp}/open-work-sess.XXXXXX")"
     trap 'rm -f "$tmp_sess"' RETURN
     for agent in "${agents[@]}"; do
@@ -147,9 +127,7 @@ collect_sessions() {
         # matched, which is the normal case, and a bare capture would abort the shell
         # under set -e.
         pids="$(pgrep -x "$agent" 2>/dev/null)" || pgrep_rc=$?
-        # Rule 2: 0 = matched, 1 = no match (legitimate), >1 = pgrep itself failed.
-        # First error wins; one key holds one message, and the earliest fault is the
-        # most likely cause of whatever follows it.
+        # 0 = matched, 1 = no match, >1 = pgrep failed. First error wins.
         if (( pgrep_rc > 1 )) && [[ -z "$sess_err" ]]; then
             sess_err="pgrep failed for $agent (exit $pgrep_rc) — session list may be incomplete"
         fi
@@ -187,8 +165,7 @@ collect_sessions() {
                 root: $root, repo_id: $repo_id, branch: $branch, idle_seconds: $idle}' >> "$tmp_sess"
         done
     done
-    # Rule 3: processes found but not one working directory resolved. Per-pid misses
-    # are races; zero out of N is lsof being unavailable or failing outright.
+    # Processes found but no cwd resolved: lsof is unavailable or failing.
     if (( n_pids > 0 && n_cwds == 0 )) && [[ -z "$sess_err" ]]; then
         sess_err="found $n_pids agent process(es) but resolved no working directories — lsof unavailable or failing"
     fi
@@ -199,12 +176,8 @@ collect_sessions() {
 # Each parser: $1 = bucket (review|authored|assigned); stdin = CLI payload.
 # Non-array input is an error, never zero items.
 #
-# NOTE the explicit `doc="$(_require_array)" || return 1` form. Do NOT write this
-# as `_require_array | jq ...`: a pipeline's exit status is jq's, and jq exits 0
-# on empty stdin. Verified: without `pipefail` the piped form returns rc=0 on an
-# HTTP 400 payload, silently turning an error into zero items — the exact R1
-# failure this guard exists to prevent. Library mode skips `set -euo pipefail`,
-# so the function must not depend on the caller having set it.
+# Use `doc=$(_require_array) || return 1`, not a pipe: without pipefail (library
+# mode) the pipeline returns jq's 0 on empty input.
 _require_array() {
     local doc; doc="$(cat)"
     [[ "$(printf '%s' "$doc" | jq -r 'type' 2>/dev/null)" == "array" ]] || return 1
@@ -244,11 +217,8 @@ parse_glab_mrs() {
     doc="$(_require_array)" || return 1
     printf '%s' "$doc" | jq -c --arg b "$bucket" '
       [ .[] | {forge:"gitlab", host:"gitlab.com",
-               # repo_id strips a host port, exactly as normalize_repo_id does: the
-               # identity of a repo must not depend on whether it was cloned over
-               # https:443 or ssh:2222, or an item on a self-hosted forge could never
-               # join a session in its local clone. The sub is anchored to the host
-               # segment, so a colon inside a path segment is left alone.
+               # Strip a host port, as normalize_repo_id does, so self-hosted items
+               # join local clones. Anchored to the host segment.
                repo_id:(.web_url | sub("^https?://"; "") | split("/-/")[0]
                         | sub("^(?<h>[^/:]+):[0-9]+"; .h)),
                id:(.id|tostring), display_id:("!" + (.iid|tostring)),
@@ -265,11 +235,7 @@ parse_glab_issues() {
     doc="$(_require_array)" || return 1
     printf '%s' "$doc" | jq -c --arg b "$bucket" '
       [ .[] | {forge:"gitlab", host:"gitlab.com",
-               # repo_id strips a host port, exactly as normalize_repo_id does: the
-               # identity of a repo must not depend on whether it was cloned over
-               # https:443 or ssh:2222, or an item on a self-hosted forge could never
-               # join a session in its local clone. The sub is anchored to the host
-               # segment, so a colon inside a path segment is left alone.
+               # Same port strip as parse_glab_mrs.
                repo_id:(.web_url | sub("^https?://"; "") | split("/-/")[0]
                         | sub("^(?<h>[^/:]+):[0-9]+"; .h)),
                id:(.id|tostring), display_id:("#" + (.iid|tostring)),
@@ -328,12 +294,6 @@ collect_items() {
         _try github_assigned parse_gh_issues assigned gh search issues --assignee=@me --state=open --limit $GH_LIMIT --json number,id,title,createdAt,repository,url,author
     fi
 
-    # `gh search prs` cannot return a head ref, but `gh pr view` can. Resolve it
-    # per PR, bounded by GH_PR_BRANCH_LOOKUP_CAP.
-    # PRs only — github_assigned above is issues, and an issue has no branch, so
-    # it is never touched here. A lookup that fails or is left uncapped simply
-    # leaves that item's branch null, which renders at the repo level; it
-    # never drops the item or fails the run.
     local gh_pr_total gh_pr_resolved=0 gh_pr_attempted=0
     gh_pr_total=$(printf '%s' "$items" | jq '[.[] | select(.forge=="github" and (.bucket=="review" or .bucket=="authored"))] | length')
     if (( gh_pr_total > 0 )); then
@@ -342,8 +302,6 @@ collect_items() {
             (( gh_pr_attempted >= GH_PR_BRANCH_LOOKUP_CAP )) && break
             gh_pr_attempted=$(( gh_pr_attempted + 1 ))
             pr_ec=0
-            # `|| pr_ec=$?`, never a bare assignment: same discipline as _try and the
-            # /user lookup above — a bare `x="$(cmd)"` aborts under set -e.
             pr_branch="$(gh pr view "$pr_num" --repo "$pr_repo" --json headRefName -q .headRefName 2>/dev/null)" || pr_ec=$?
             if (( pr_ec == 0 )) && [[ -n "$pr_branch" ]]; then
                 items=$(jq -c --arg id "$pr_id" --arg b "$pr_branch" \
@@ -362,14 +320,9 @@ collect_items() {
     fi
 
     local uid_payload uid_stderr
-    # Capture stdout and stderr separately: this is one of the eight requests, and the global rule is
-    # that a failed query surfaces the CLI's own text rather than vanishing. glab returns
-    # structured errors in the body (stdout) with a terse summary on stderr; we need both.
-    # Capturing separately ensures jq only parses the JSON body, not stderr noise.
-    # `|| true` for the same reason _try uses `|| exit_code=$?`: a bare assignment from a
-    # failing command substitution aborts under set -e, which would make an auth failure
-    # render as emptiness. glab exits non-zero on auth failure and we still need its body;
-    # the status is not consulted because the `.username` check below decides success.
+    # glab puts structured errors in the body and a summary on stderr: keep both
+    # for the message, parse only the body. `|| true`: `.username` decides
+    # success, not the exit status.
     uid_payload="$(glab api /user 2>"$TMPDIR_ERR")" || true
     uid_stderr="$(cat "$TMPDIR_ERR" 2>/dev/null)"
     if uid="$(printf '%s' "$uid_payload" | jq -r '.username // empty' 2>/dev/null)" && [[ -n "$uid" ]]; then
@@ -393,10 +346,7 @@ collect_items() {
 collect() {
     local reviews_only="${1:-}" exclude_reviewed="${2:-}"
     local sessions forge
-    # collect_sessions now returns {sessions, errors}; unwrap the array and merge its
-    # error map into the document's single flat .errors. The two maps share no keys:
-    # sessions uses only `sessions`, collect_items only `<forge>_<bucket>`. The
-    # document's top-level shape is unchanged, so shape() and --from-json are untouched.
+    # `sessions` is not a forge key, so a plain merge is safe.
     sessions="$(collect_sessions)"
     forge="$(collect_items "$reviews_only" "$exclude_reviewed")"
     jq -nc --argjson sessions "$sessions" --argjson forge "$forge" \

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# task-estimate — estimate token usage for a task prompt and recommend a provider routing strategy.
+# task-estimate — estimate token usage for a task prompt and bucket it S/M/L/XL.
 set -euo pipefail
 
 usage() {
@@ -110,10 +110,7 @@ SESSION_CAP=$(echo "$CONFIG_JSON" | jq -r '.session_cap')
 
 # --- heuristic ---
 
-# Base token floor: prompt char count / 4 (rough English tokenization heuristic).
-# Plus a flat 3750-token planning overhead so trivial prompts aren't zeroed out.
-# (Initial calibration set this to 3000; bumped +25% so verb-amplified prompts
-# reach M/L without requiring scope-adverb hits.)
+# chars/4 approximates English tokens. The flat 3750 is tuned so verb-amplified prompts reach M/L without scope-adverb hits.
 prompt_token_floor() {
     local chars
     chars=$(printf '%s' "$PROMPT" | wc -c | tr -d ' ')
@@ -153,8 +150,7 @@ get_scope_multiplier_value() {
     echo "1.0"
 }
 
-# Estimate how many subagents this task will likely spawn, then add per-agent overhead.
-# Each subagent independently reads repo context (~28k tokens on average).
+# Agent count from the first verb_to_agents pattern that matches, in config key order.
 get_agent_count() {
     local matched=0 count=0 pattern
     while IFS= read -r pattern; do
@@ -170,18 +166,16 @@ get_agent_count() {
     echo "$count"
 }
 
-# Heuristic running tally. Later tasks add path-derived and cwd-derived contributions.
 EST_BASE=$(prompt_token_floor)
 
 # --- path / repo extraction ---
 
 extract_paths() {
-    # Grab `/abs/path` and `~/path` sequences from the prompt.
     printf '%s' "$PROMPT" | grep -oE '(~|/)[A-Za-z0-9._/-]+' || true
 }
 
 path_contribution() {
-    # ~2000 tokens per named path. Cap at 6 paths so a long file list doesn't dominate.
+    # Cap at 6 so a long file list doesn't dominate.
     local count=0
     while IFS= read -r p; do
         [[ -z "$p" ]] && continue
@@ -192,7 +186,6 @@ path_contribution() {
 }
 
 cwd_signals() {
-    # Modified file count in cwd (if in git); each modified file → +1500 tokens.
     if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         local modified
         modified=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
@@ -264,7 +257,6 @@ phase_share() {
     echo "$CONFIG_JSON" | jq -r --arg k "$key" '.phase_split[$k]'
 }
 
-# Verb-driven phase shift: "audit" → +20% read, -20% edit; "refactor" → +20% edit, -20% read.
 phase_amount() {
     local key="$1" share base
     share=$(phase_share "$key")
@@ -289,7 +281,7 @@ PH_PLAN=$(phase_amount plan)
 PH_EDIT=$(phase_amount edit)
 PH_VERIFY=$(phase_amount verify)
 
-# Reconcile rounding so the breakdown sums to total ±1.
+# Fold rounding and verb-shift drift into verify so phases sum exactly to total.
 PH_SUM=$(( PH_READ + PH_PLAN + PH_EDIT + PH_VERIFY ))
 PH_DELTA=$(( EST_TOTAL - PH_SUM ))
 PH_VERIFY=$(( PH_VERIFY + PH_DELTA ))
@@ -298,7 +290,7 @@ PH_VERIFY=$(( PH_VERIFY + PH_DELTA ))
 
 CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/scuba10steve-skills/task-estimate"
 
-# Deterministic-ish run id: short hash of prompt, prefixed with the date.
+# Same prompt on the same day reuses the run dir.
 generate_run_id() {
     local hash
     hash=$(printf '%s\n' "$PROMPT" | shasum | cut -c1-6)
@@ -375,7 +367,6 @@ Shared scratch: $RUN_DIR/plan.md
 EOF
     fi
 
-    # Emit the prompt bodies as a JSON array for the --json branch.
     jq -nc --arg p1 "$body1" --arg p2 "$body2" --arg p3 "$body3" \
             --arg pp1 "$p_plan" --arg pp2 "$p_edit" --arg pp3 "$p_verify" \
         'def prov: if . == "" then null else . end;
