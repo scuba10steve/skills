@@ -415,11 +415,18 @@ run_with_timeout() {
 #   codex    `codex exec -` consumes stdin (live-confirmed; needs OpenAI auth)
 #   gemini   `-p ""` + stdin-append (form accepted; needs GEMINI_API_KEY)
 #   kiro     positional arg (live-confirmed)
-#   opencode positional arg per --help (live-unverified; SIGKILL-protected)
+#   opencode positional arg + `--agent` (2.3.0: inline agent live-confirmed to resolve;
+#            deny enforcement unverified live, no reachable provider; SIGKILL-protected).
+#            The agent is defined inline via OPENCODE_CONFIG_CONTENT so the user's
+#            own permission rules cannot grant the reviewer edits or shell; OpenCode
+#            documents deny rules as enforced even when non-interactive.
 #   duo      `run --goal <prompt>` (goal is a required flag; stdin is NOT read.
 #            UNVERIFIED end-to-end — needs `glab auth login`; without --goal it
 #            drops into the interactive TUI. timeout+SIGKILL degrades a hang cleanly)
 kiro_supports_effort() { kiro-cli chat --help 2>/dev/null | grep -q -- '--effort'; }
+
+OPENCODE_REVIEWER_AGENT=outside-voice-reviewer
+OPENCODE_REVIEWER_CONFIG='{"agents":{"outside-voice-reviewer":{"description":"Read-only outside reviewer","mode":"primary","permissions":[{"action":"edit","resource":"*","effect":"deny"},{"action":"shell","resource":"*","effect":"deny"}]}}}'
 
 run_target() {
     local name="$1" prompt="$2" secs="$3" model="${4:-}"
@@ -427,7 +434,8 @@ run_target() {
         claude)   printf '%s' "$prompt" | run_with_timeout "$secs" claude -p ;;
         gemini)   printf '%s' "$prompt" | run_with_timeout "$secs" gemini -p "" ;;
         codex)    printf '%s' "$prompt" | run_with_timeout "$secs" codex exec - ;;
-        opencode) run_with_timeout "$secs" opencode run "$prompt" ;;
+        opencode) OPENCODE_CONFIG_CONTENT="$OPENCODE_REVIEWER_CONFIG" \
+                      run_with_timeout "$secs" opencode run --agent "$OPENCODE_REVIEWER_AGENT" "$prompt" ;;
         kiro)     local kiro_args=()
                   [[ -n "$model" ]] && kiro_args+=(--model "$model")
                   # Older kiro-cli builds reject --effort outright, so probe

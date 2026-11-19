@@ -81,7 +81,7 @@ Or copy the folders in `skills/` into your harness's skills directory.
 
 - `git` and `jq`.
 - `gh` and/or `glab`, optional, for the PR/MR/issue skills.
-- Optional reviewer CLIs for `outside-voice`: `claude`, `gemini`, `codex`, `opencode`, `kiro-cli`, and `glab` for the `duo` target (runs `glab duo cli`).
+- Optional reviewer CLIs for `outside-voice`: `claude`, `gemini`, `codex`, `opencode`, `kiro-cli`, and `glab` for the `duo` target (runs `glab duo cli`). `opencode` runs under an inline agent that denies edits and shell, so local OpenCode permission rules do not apply to the review.
 - The superpowers plugin, for `spec-and-plan`.
 
 ## Configuration

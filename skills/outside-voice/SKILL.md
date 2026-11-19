@@ -7,6 +7,12 @@ description: Dispatch the current work to a DIFFERENT AI harness for a read-only
 
 Dispatch the current work to another harness for a read-only review.
 
+"Read-only" is enforced by the script only where the target CLI offers a
+switch: `kiro` runs with `--trust-tools=fs_read`, and `opencode` runs under an
+inline `outside-voice-reviewer` agent that denies edits and shell regardless
+of the user's own OpenCode permission rules. Every other target relies on the
+prompt and on that CLI's own headless defaults.
+
 ## Args
 
 - `/outside-voice <targets> "<instruction>" [path ...]`

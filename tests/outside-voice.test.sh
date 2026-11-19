@@ -264,6 +264,15 @@ single="$(cd "$TR" && bash "$SCRIPT" claude "review")"
 assert_contains "single runs" "REVIEW-FROM-claude" "$single"
 assert_contains "single framed" "═══ claude ═══" "$single"
 
+# opencode runs under a reviewer agent the script defines inline, so the
+# user's own permission rules cannot grant the reviewer edits or shell.
+printf '#!/usr/bin/env bash\necho "ARGS:$*"\necho "CFG:${OPENCODE_CONFIG_CONTENT:-}"\n' > "$STUBDIR/opencode"
+oc="$(run_target opencode "review" 30 2>/dev/null)"
+assert_contains "opencode gets restricted agent" "ARGS:run --agent outside-voice-reviewer review" "$oc"
+assert_contains "opencode agent denies edits" '{"action":"edit","resource":"*","effect":"deny"}' "$oc"
+assert_contains "opencode agent denies shell" '{"action":"shell","resource":"*","effect":"deny"}' "$oc"
+printf '#!/usr/bin/env bash\necho "REVIEW-FROM-opencode"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/opencode"
+
 # Multi target without --yes shows preview and does NOT run.
 preview="$(cd "$TR" && bash "$SCRIPT" claude,gemini "review")"
 assert_contains "preview count" "2 paid reviewer runs" "$preview"
