@@ -397,13 +397,16 @@ run_with_timeout() {
 #   kiro     positional arg (live-confirmed)
 #   opencode positional arg + `--agent` (2.3.0: inline agent resolves live; deny
 #            enforcement unverified live, no reachable provider; SIGKILL-protected)
-#   duo      `run --goal <prompt>` (goal is a required flag; stdin is NOT read.
-#            UNVERIFIED end-to-end — needs `glab auth login`; without --goal it
-#            drops into the interactive TUI. timeout+SIGKILL degrades a hang cleanly)
+#   duo      `run --workflow-type chat --flow-config <inline json> --goal <prompt>`
+#            (chat type required: headless otherwise takes the registry Developer
+#            flow and drops the flow config; client always sends the flow, toolset
+#            binding live-confirmed on Duo CLI 9.6.0 / GitLab 19.7 only; stdin not
+#            read; needs a GitLab project or default Duo namespace; SIGKILL-protected)
 kiro_supports_effort() { kiro-cli chat --help 2>/dev/null | grep -q -- '--effort'; }
 
 OPENCODE_REVIEWER_AGENT=outside-voice-reviewer
 OPENCODE_REVIEWER_CONFIG='{"agents":{"outside-voice-reviewer":{"description":"Read-only outside reviewer","mode":"primary","permissions":[{"action":"edit","resource":"*","effect":"deny"},{"action":"shell","resource":"*","effect":"deny"}]}}}'
+DUO_REVIEWER_FLOW='{"version":"v1","environment":"chat-partial","components":[{"name":"reviewer","type":"AgentComponent","prompt_id":"reviewer_prompt","inputs":[{"from":"context:goal","as":"goal"}],"toolset":["list_dir","read_file","read_files","find_files","grep"]}],"prompts":[{"prompt_id":"reviewer_prompt","name":"reviewer_prompt","unit_primitives":["duo_agent_platform"],"prompt_template":{"system":"You are a read-only outside code reviewer. You may only list, find, read, and grep files; never modify files or execute commands. Output analysis only.","user":"{{goal}}","placeholder":"history"}}],"flow":{"entry_point":"reviewer"}}'
 
 run_target() {
     local name="$1" prompt="$2" secs="$3" model="${4:-}"
@@ -421,7 +424,8 @@ run_target() {
                   [[ -n "$effort" ]] && kiro_supports_effort && kiro_args+=(--effort "$effort")
                   run_with_timeout "$secs" kiro-cli chat --no-interactive \
                       --trust-tools=fs_read ${kiro_args[@]+"${kiro_args[@]}"} "$prompt" ;;
-        duo)      run_with_timeout "$secs" glab duo cli --yes run --goal "$prompt" ;;
+        duo)      run_with_timeout "$secs" glab duo cli --yes run --workflow-type chat \
+                      --flow-config "$DUO_REVIEWER_FLOW" --goal "$prompt" ;;
     esac
 }
 
