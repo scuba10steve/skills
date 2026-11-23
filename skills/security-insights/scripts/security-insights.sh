@@ -234,7 +234,7 @@ def merge:
                   + (if .ecosystem != null then {ecosystem} else {} end))};
 
 [.results[] | if well_formed then . else malformed end
- | .findings |= unique_by([.source, .ecosystem, .native_id])] as $results
+ | .findings |= unique_by([.source, .native_id])] as $results
 | [$results[].findings[] | normalise] as $raw
 | components($raw | length; $raw | link_sets) as $labels
 | ([range($raw | length)] | group_by($labels[.]) | map(map($raw[.]) | merge)
@@ -441,7 +441,7 @@ def depth_label: opt | if . == null then null elif type == "number" then (if . =
 if type != "array" then error("not an array") else
 [to_entries[] | .key as $i | .value
  | select(.repositoryPath == $path and .repositoryOrigin == $origin)
- | {source: "moderne", native_id: "VulnerabilityReport:row:\($i)", kind: "dependency",
+ | {source: "moderne", native_id: "VulnerabilityReport:\($eco):row:\($i)", kind: "dependency",
     severity_raw: .severity, severity_origin: "source",
     title: ((.summary | opt) // .cve),
     package: {name: (if .groupId != null then "\(.groupId):\(.artifactId)" else .packageName end),
@@ -474,13 +474,13 @@ si_mod_list() {
     [[ -n "$SI_MOD_PATH" ]] || SI_MOD_ORIGIN=""
 }
 
-# si_mod_step <build|run> <args...> -> progress on stderr; on failure prints the skipped result, returns 1
+# si_mod_step <build|run> <args...> -> progress on stderr; on failure sets SI_READ_REASON, returns 1
 si_mod_step() {
     local step="$1" err rc=0
     err=$(mod "$@" 2>&1 >&2) || rc=$?
     [[ -z "$err" ]] || printf '%s\n' "$err" >&2
     [[ "$rc" -ne 0 ]] || return 0
-    si_skipped moderne "mod $step failed: $(si_first_err "$rc" <<<"$err")"
+    SI_READ_REASON="mod $step failed: $(si_first_err "$rc" <<<"$err")"
     return 1
 }
 
@@ -492,17 +492,19 @@ si_source_moderne() {
         si_skipped moderne "no supported dependency manifest; DependencyVulnerabilityCheck covers Maven/Gradle, npm, Python, Go and NuGet"
         return 0
     fi
-    if [[ "$moderne_run" == 1 ]]; then si_mod_step build "$dir" || return 0; fi
+    if [[ "$moderne_run" == 1 ]] && ! si_mod_step build "$dir"; then si_skipped moderne "$SI_READ_REASON"; return 0; fi
     si_mod_list "$dir"
     if [[ -z "$SI_MOD_ORIGIN" ]]; then
         si_skipped moderne "no Moderne LST for this repository; run: mod build ."
         return 0
     fi
-    if [[ "$moderne_run" == 1 ]]; then
-        for eco in $ecos; do si_mod_step run "$dir" --recipe "$(si_mod_recipe "$eco")" || return 0; done
-    fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/si-mod.XXXXXX")
     trap 'rm -rf "$work"; trap - RETURN' RETURN
+    if [[ "$moderne_run" == 1 ]]; then
+        for eco in $ecos; do
+            si_mod_step run "$dir" --recipe "$(si_mod_recipe "$eco")" || printf '%s' "$SI_READ_REASON" > "$work/run-failed-$eco"
+        done
+    fi
     if ! mod run-history --json --most-recent "$dir" >"$work/history.json" 2>/dev/null \
         || ! jq -e 'type == "object"' "$work/history.json" >/dev/null 2>&1; then
         si_skipped moderne "run-history output not understood"
@@ -511,6 +513,11 @@ si_source_moderne() {
     : > "$work/findings.json"
     for eco in $ecos; do
         recipe=$(si_mod_recipe "$eco") rc=0 SI_READ_REASON=""
+        if [[ -f "$work/run-failed-$eco" ]]; then
+            SI_READ_REASON=$(cat "$work/run-failed-$eco")
+            si_read "$eco" >> "$work/reads.json"
+            continue
+        fi
         if ! entry=$(jq -r --arg r "$recipe" '
                 [to_entries[] | select(.value.recipeId == $r)] | sort_by(.key) | last
                 | if . == null then empty else "\(.key)\t\(.value.recipeOptions.scope // null | tojson)" end

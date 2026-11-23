@@ -215,7 +215,7 @@ case "$1" in
                *"--data-table org.openrewrite.nodejs.table.VulnerabilityReport"*) cat "$MODFIX/study_nodejs.json" ;;
                *) cat "$MODFIX/live-study.json" ;;
            esac ;;
-    build|run) if [[ -f "$MODFIX/$1.rc" ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi
+    build|run) if [[ -f "$MODFIX/$1.rc" || ( "$1" == run && -f "$MODFIX/run-nodejs.rc" && "$*" == *org.openrewrite.nodejs.* ) ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi
                if [[ "$1" == build && -f "$MODFIX/build.writes" ]]; then cp "$MODFIX/list_good.json" "$MODFIX/live-list.json"; fi ;;
 esac
 exit 0
@@ -495,6 +495,12 @@ assert_eq "glab absent -> skipped" "glab not installed" "$(PATH="$NOGLAB" si_sou
 assert_eq "glab unauthenticated -> skipped" "glab auth status --hostname gitlab.example.com failed: not logged in" "$(KNOWN_GL= si_source_gitlab gitlab.example.com g/r | reason_of)"
 
 echo "si_source_moderne"
+assert_eq "python recipe" org.openrewrite.python.dependencies.DependencyVulnerabilityCheck "$(si_mod_recipe python)"
+assert_eq "golang recipe" org.openrewrite.golang.dependencies.DependencyVulnerabilityCheck "$(si_mod_recipe golang)"
+assert_eq "csharp recipe" org.openrewrite.csharp.dependencies.DependencyVulnerabilityCheck "$(si_mod_recipe csharp)"
+assert_eq "python table" org.openrewrite.python.dependencies.table.VulnerabilityReport "$(si_mod_table python)"
+assert_eq "golang table" org.openrewrite.golang.dependencies.table.VulnerabilityReport "$(si_mod_table golang)"
+assert_eq "csharp table" org.openrewrite.csharp.dependencies.table.VulnerabilityReport "$(si_mod_table csharp)"
 assert_eq "no manifest" "no supported dependency manifest; DependencyVulnerabilityCheck covers Maven/Gradle, npm, Python, Go and NuGet" "$(si_source_moderne "$REPO" 0 | reason_of)"
 assert_eq "java detected" java "$(si_mod_ecosystems "$JVMREPO")"
 assert_eq "gradle settings detected" java "$(si_mod_ecosystems "$GRADLEREPO")"
@@ -505,7 +511,7 @@ assert_eq "csharp detected by csproj glob" csharp "$(si_mod_ecosystems "$CSREPO"
 assert_eq "csproj in subdir or as a directory is not detected" "" "$(si_mod_ecosystems "$CSSUBREPO")"
 assert_eq "two ecosystems in order" $'java\nnodejs' "$(si_mod_ecosystems "$MIXREPO")"
 assert_eq "mod absent" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$JVMREPO" 0 | reason_of)"
-assert_eq "mod probed before JVM check" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$REPO" 0 | reason_of)"
+assert_eq "mod probed before ecosystem detection" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$REPO" 0 | reason_of)"
 mod_use list=list_empty.json
 assert_eq "no LST" "no Moderne LST for this repository; run: mod build ." "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
 assert_eq "no java run names the ecosystem" "no java DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck" "$(mod_use list=list_good.json history=history_other_recipe.json; si_source_moderne "$JVMREPO" 0 | reason_of)"
@@ -537,7 +543,7 @@ assert_eq "empty fixedVersion is null" null "$(jq -c '.findings[1].package.fix_v
 assert_eq "numeric depth 2 maps to transitive" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
 assert_eq "epss number" 0.42 "$(jq -c '.findings[0].epss' <<<"$r")"
 assert_eq "epss null" null "$(jq -c '.findings[1].epss' <<<"$r")"
-assert_eq "native id by row index" "VulnerabilityReport:row:0" "$(jq -r '.findings[0].native_id' <<<"$r")"
+assert_eq "native id by ecosystem and row index" "VulnerabilityReport:java:row:0" "$(jq -r '.findings[0].native_id' <<<"$r")"
 assert_eq "scope from run options" test "$(jq -r '.findings[0].package.scope' <<<"$r")"
 mod_use history=history_noscope.json
 assert_eq "scope null when run has none" null "$(si_source_moderne "$JVMREPO" 0 | jq -r '.findings[0].package.scope')"
@@ -550,7 +556,7 @@ assert_eq "build failure skips" "mod build failed: build exploded" "$(si_source_
 rm -f "$MODFIX/build.rc"; : > "$MODFIX/run.rc"
 assert_eq "run failure skips" "mod run failed: run exploded" "$(si_source_moderne "$JVMREPO" 1 2>/dev/null | reason_of)"
 rm -f "$MODFIX/run.rc"
-assert_eq "settings.gradle.kts passes the JVM check" ok "$(si_source_moderne "$GRADLEREPO" 0 | jq -r .source.status)"
+assert_eq "settings.gradle.kts detected as java and read" ok "$(si_source_moderne "$GRADLEREPO" 0 | jq -r .source.status)"
 mod_use study=study_bad_row.json
 r=$(si_source_moderne "$JVMREPO" 0)
 assert_eq "non-object row -> skipped" skipped "$(jq -r .source.status <<<"$r")"
@@ -579,6 +585,7 @@ assert_eq "run-history read once" 1 "$(grep -c '^mod run-history' "$ARGV_LOG")"
 assert_contains "latest run per recipe" "--recipe-run=20261121100000-nodej --data-table org.openrewrite.nodejs.table.VulnerabilityReport" "$(argv)"
 assert_eq "java rows tagged java" '["java","java","nodejs"]' "$(jq -c '[.findings[].ecosystem]' <<<"$r")"
 assert_eq "rows from two tables survive shaping" 3 "$(shape_result <<<"$r" | jq '.findings|length')"
+assert_eq "row 0 of each table has its own id" '["VulnerabilityReport:java:row:0","VulnerabilityReport:nodejs:row:0"]' "$(jq -c '[.findings[].native_id|select(endswith(":row:0"))]' <<<"$r")"
 mod_use history=history_good.json
 r=$(si_source_moderne "$MIXREPO" 0)
 assert_eq "one missing run -> partial" partial "$(jq -r .source.status <<<"$r")"
@@ -591,6 +598,12 @@ mod_use history=history_good.json
 assert_eq "one build then two runs" "mod build|mod run|mod run" "$(mod_steps)"
 assert_eq "runs name both recipes" 2 "$(grep -c -E -- '--recipe org.openrewrite.(java.dependencies|nodejs.security).DependencyVulnerabilityCheck' "$ARGV_LOG")"
 assert_eq "runs in detection order" "java nodejs" "$(grep -oE -- '^mod run .* --recipe org.openrewrite.(java|nodejs)' "$ARGV_LOG" | sed -E 's/.*org.openrewrite.//' | paste -sd' ' -)"
+mod_use history=history_java_and_nodejs.json; : > "$MODFIX/run-nodejs.rc"
+r=$(si_source_moderne "$MIXREPO" 1 2>/dev/null)
+rm -f "$MODFIX/run-nodejs.rc"; mod_use history=history_good.json
+assert_eq "one failed run -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "failed run keeps the other ecosystem's findings" '["java","java"]' "$(jq -c '[.findings[].ecosystem]' <<<"$r")"
+assert_contains "failed run named on its read" "mod run failed: run exploded" "$(jq -r '.source.reads[]|select(.name=="nodejs").reason' <<<"$r")"
 out=$(SECURITY_INSIGHTS_LIB= "$BASH" "$SCRIPT" --repo "$JVMREPO" 2>/dev/null)
 assert_eq "collect includes moderne source" 1 "$(jq '[.sources[]|select(.name=="moderne" and .status=="ok")]|length' <<<"$out")"
 
