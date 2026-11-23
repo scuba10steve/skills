@@ -369,19 +369,23 @@ echo "si_source_github"
 export KNOWN_GH=github.com
 r=$(si_source_github github.com o/r)
 assert_eq "all reads ok -> ok" ok "$(jq -r .source.status <<<"$r")"
-d=$(jq -c '.findings[]|select(.native_id=="1")' <<<"$r")
+d=$(jq -c '.findings[]|select(.native_id=="dependabot:1")' <<<"$r")
 assert_eq "dependabot severity raw" high "$(jq -r .severity_raw <<<"$d")"
 assert_eq "dependabot scope" development "$(jq -r .package.scope <<<"$d")"
 assert_eq "dependabot identifiers" '["CVE-2024-1","GHSA-AAAA"]' "$(jq -c .identifiers <<<"$d")"
 assert_eq "dependabot exact range is version" 1.2.3 "$(jq -r .package.version <<<"$d")"
-cs=$(jq -c '.findings[]|select(.native_id=="7")' <<<"$r")
-assert_eq "code scanning CWE tag becomes CWE-n" '["java/sql-injection","CWE-79"]' "$(shape_result <<<"$r" | jq -c '.findings[]|select(.key=="github:code:7").identifiers')"
+cs=$(jq -c '.findings[]|select(.native_id=="code-scanning:7")' <<<"$r")
+assert_eq "code scanning CWE tag becomes CWE-n" '["java/sql-injection","CWE-79"]' "$(shape_result <<<"$r" | jq -c '.findings[]|select(.key=="github:code:code-scanning:7").identifiers')"
 assert_eq "code scanning falls back to rule.severity" warning "$(jq -r .severity_raw <<<"$cs")"
 assert_eq "code scanning location" 'src/A.java:12' "$(jq -r '.locations[0]|"\(.file):\(.line)"' <<<"$cs")"
 assert_eq "secret is policy critical" policy "$(jq -r '.findings[]|select(.kind=="secret").severity_origin' <<<"$r")"
 assert_eq "secret has no locations" 0 "$(jq '.findings[]|select(.kind=="secret").locations|length' <<<"$r")"
 assert_contains "gh api carries --hostname" "gh api --hostname github.com repos/o/r/" "$(argv)"
 assert_contains "gh api uses explicit path" "repos/o/r/dependabot/alerts" "$(argv)"
+cp "$GHFIX/code-scanning.json" "$GHFIX/code-scanning.orig"; jq '.[0].number = 1' "$GHFIX/code-scanning.orig" > "$GHFIX/code-scanning.json"
+c=$(si_source_github github.com o/r | shape_result)
+assert_eq "same alert number across endpoints keeps both findings" "code dependency" "$(jq -r '[.findings[]|select(.sources[0].id|test("(^|:)1$"))|.kind]|sort|join(" ")' <<<"$c")"
+mv "$GHFIX/code-scanning.orig" "$GHFIX/code-scanning.json"
 echo 1 > "$GHFIX/code-scanning.rc"; echo "Code scanning is not enabled for this repository" > "$GHFIX/code-scanning.msg"
 r=$(si_source_github github.com o/r)
 assert_eq "one read 403 -> partial" partial "$(jq -r .source.status <<<"$r")"

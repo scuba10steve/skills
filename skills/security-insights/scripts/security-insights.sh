@@ -259,7 +259,7 @@ si_gh_read() {
 
 SI_GH_MAP='
 def dependabot:
-  {source: "github", native_id: (.number | tostring), kind: "dependency",
+  {source: "github", native_id: ("dependabot:\(.number)"), kind: "dependency",
    severity_raw: .security_advisory.severity, severity_origin: "source",
    title: .security_advisory.summary,
    package: {name: .dependency.package.name,
@@ -270,7 +270,7 @@ def dependabot:
    locations: [{file: .dependency.manifest_path, line: null}],
    url: .html_url, solution: null, epss: null, as_of: null};
 def code_scanning:
-  {source: "github", native_id: (.number | tostring), kind: "code",
+  {source: "github", native_id: ("code-scanning:\(.number)"), kind: "code",
    severity_raw: (.rule.security_severity_level // .rule.severity), severity_origin: "source",
    title: (.rule.description // .rule.id),
    package: null,
@@ -278,7 +278,7 @@ def code_scanning:
    locations: [{file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}],
    url: .html_url, solution: null, epss: null, as_of: null};
 def secret_scanning:
-  {source: "github", native_id: (.number | tostring), kind: "secret",
+  {source: "github", native_id: ("secret-scanning:\(.number)"), kind: "secret",
    severity_raw: "n/a (secret)", severity_origin: "policy",
    title: (.secret_type_display_name // .secret_type),
    package: null, identifiers: [.secret_type], locations: [],
