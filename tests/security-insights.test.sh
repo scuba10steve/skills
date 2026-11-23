@@ -148,6 +148,7 @@ if [[ "\$1" == "api" && "$cli" == "gh" ]]; then
         *secret-scanning/alerts*) ep=secret-scanning ;;
         *) ep=unknown ;;
     esac
+    [[ -f "\$GHFIX/\$ep.silent" ]] && exit 1
     rc=0; [[ -f "\$GHFIX/\$ep.rc" ]] && rc=\$(tr -d '[:space:]' < "\$GHFIX/\$ep.rc")
     if [[ -n "\$rc" && "\$rc" != 0 ]]; then
         msg=\$(cat "\$GHFIX/\$ep.msg" 2>/dev/null || echo failed)
@@ -390,7 +391,12 @@ cp "$GHFIX/dependabot.small" "$GHFIX/dependabot.json"; printf '[]' > "$GHFIX/dep
 out=$(SECURITY_INSIGHTS_LIB= KNOWN_GH=github.com "$BASH" "$SCRIPT" --repo "$REPO")
 assert_eq "collect includes github source" 1 "$(jq '[.sources[]|select(.name=="github" and .status=="ok")]|length' <<<"$out")"
 for e in dependabot code-scanning secret-scanning; do echo 1 > "$GHFIX/$e.rc"; done
-assert_eq "all reads fail -> skipped" skipped "$(si_source_github github.com o/r | jq -r .source.status)"
+r=$(si_source_github github.com o/r)
+assert_eq "all reads fail -> skipped" skipped "$(jq -r .source.status <<<"$r")"
+assert_eq "all-reads reason names each read" "dependabot: HTTP 403: failed; code-scanning: HTTP 403: Code scanning is not enabled for this repository; secret-scanning: HTTP 403: failed" "$(jq -r .source.reason <<<"$r")"
+: > "$GHFIX/dependabot.silent"
+assert_eq "silent failure reason" "HTTP ?: exit 1, no error output" "$(si_source_github github.com o/r | jq -r '.source.reads[]|select(.name=="dependabot").reason')"
+rm -f "$GHFIX/dependabot.silent"
 assert_eq "gh absent -> skipped" "gh not installed" "$(PATH="$NOGH" si_source_github github.com o/r | jq -r .source.reason)"
 assert_eq "gh unauthenticated -> skipped" "gh auth status --hostname github.com failed: not logged in" "$(KNOWN_GH= si_source_github github.com o/r | jq -r .source.reason)"
 

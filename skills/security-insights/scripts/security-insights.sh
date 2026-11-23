@@ -218,7 +218,7 @@ si_gh_read() {
         return 0
     fi
     msg=$(jq -r '.message // empty' <<<"$out" 2>/dev/null | head -n 1) || msg=""
-    [[ -n "$msg" ]] || msg="$err"
+    [[ -n "$msg" ]] || msg="${err:-exit $rc, no error output}"
     code=$(sed -n 's/.*(HTTP \([0-9][0-9]*\)).*/\1/p' <<<"$err" | head -n 1)
     SI_READ_REASON="HTTP ${code:-?}: $msg"
 }
@@ -280,7 +280,8 @@ si_source_github() {
         fi
         if [[ -n "$SI_READ_REASON" ]]; then
             reads=$(jq -c --arg n "$endpoint" --arg r "$SI_READ_REASON" '. + [{name: $n, status: "skipped", reason: $r}]' <<<"$reads")
-            if [[ -n "$reasons" ]]; then reasons="$reasons; $SI_READ_REASON"; else reasons="$SI_READ_REASON"; fi
+            if [[ -n "$reasons" ]]; then reasons="$reasons; "; fi
+            reasons="$reasons$endpoint: $SI_READ_REASON"
         fi
     done
     jq -nc --argjson reads "$reads" --slurpfile findings "$acc" --arg reasons "$reasons" --argjson ok "$ok" --argjson total "$total" '
