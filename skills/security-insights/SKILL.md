@@ -85,4 +85,4 @@ Open vulnerability findings for the current repository from its forge and Modern
 | CWE-79 | `org.openrewrite.java.security.xss.FixXssVulnerability` |
 | CWE-250, CWE-269 | `org.openrewrite.java.security.ImproperPrivilegeManagement` |
 
-Verified against `gh 2.104.0`, `glab 1.130.0`, `Moderne CLI 4.12.13`.
+Verified against `gh 2.104.0`, `glab 1.130.0`, `Moderne CLI 4.13.0`.
