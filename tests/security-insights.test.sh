@@ -41,6 +41,23 @@ NOREMOTE="$TMPHOME/noremote"; mkrepo "$NOREMOTE"
 JVMREPO="$TMPHOME/jvm";     mkrepo "$JVMREPO"
 : > "$JVMREPO/pom.xml"
 
+GHFIX="$TMPHOME/ghfix"; mkdir "$GHFIX"; export GHFIX
+cat > "$GHFIX/dependabot.json" <<'JSON'
+[{"number":1,"html_url":"https://github.com/o/r/security/dependabot/1",
+  "security_advisory":{"severity":"high","summary":"Lib is vulnerable","cve_id":"CVE-2024-1","ghsa_id":"GHSA-AAAA"},
+  "dependency":{"package":{"name":"org.example:lib"},"manifest_path":"pom.xml","scope":"development"},
+  "security_vulnerability":{"vulnerable_version_range":"= 1.2.3","first_patched_version":{"identifier":"1.2.4"}}}]
+JSON
+cat > "$GHFIX/code-scanning.json" <<'JSON'
+[{"number":7,"html_url":"https://github.com/o/r/security/code-scanning/7",
+  "rule":{"id":"java/sql-injection","severity":"warning","description":"SQL injection"},
+  "most_recent_instance":{"location":{"path":"src/A.java","start_line":12}}}]
+JSON
+cat > "$GHFIX/secret-scanning.json" <<'JSON'
+[{"number":3,"html_url":"https://github.com/o/r/security/secret-scanning/3","secret_type":"aws_key",
+  "secret_type_display_name":"AWS Key","locations_url":"https://api.github.com/repos/o/r/secret-scanning/alerts/3/locations"}]
+JSON
+
 ARGV_LOG="$TMPHOME/argv.log"; export ARGV_LOG
 : > "$ARGV_LOG"
 
@@ -54,6 +71,23 @@ if [[ "\$1 \$2 \$3" == "auth status --hostname" ]]; then
     if [[ -n "\${$known:-}" && "\$4" == "\${$known}" ]]; then exit 0; fi
     echo "not logged in" >&2
     exit 1
+fi
+if [[ "\$1" == "api" && "$cli" == "gh" ]]; then
+    case "\$*" in
+        *dependabot/alerts*) ep=dependabot ;;
+        *code-scanning/alerts*) ep=code-scanning ;;
+        *secret-scanning/alerts*) ep=secret-scanning ;;
+        *) ep=unknown ;;
+    esac
+    rc=0; [[ -f "\$GHFIX/\$ep.rc" ]] && rc=\$(tr -d '[:space:]' < "\$GHFIX/\$ep.rc")
+    if [[ -n "\$rc" && "\$rc" != 0 ]]; then
+        msg=\$(cat "\$GHFIX/\$ep.msg" 2>/dev/null || echo failed)
+        jq -nc --arg m "\$msg" '{message: \$m}'
+        echo "gh: \$msg (HTTP 403)" >&2
+        exit 1
+    fi
+    jq -c '.[]' "\$GHFIX/\$ep.json"
+    exit 0
 fi
 echo '[]'
 FAKE
@@ -209,6 +243,34 @@ assert_eq "containers merge on CVE" 1 "$(shape "$(two_containers gitlab CVE-2024
 # merged package fields: gitlab member has depth null, scope null; moderne member has depth transitive, scope test
 p=$(shape "$(two_deps_pkg gitlab CVE-2024-1 null null moderne CVE-2024-1 transitive test)" | jq -c '.findings[0].package|{name,version,depth,scope}')
 assert_eq "merged package takes first-source name/version, first non-null depth/scope" '{"name":"org.example:lib","version":"1.2.3","depth":"transitive","scope":"test"}' "$p"
+
+echo "si_source_github"
+export KNOWN_GH=github.com
+r=$(si_source_github github.com o/r)
+assert_eq "all reads ok -> ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "dependabot severity raw" high "$(jq -r '.findings[]|select(.native_id=="1").severity_raw' <<<"$r")"
+assert_eq "dependabot scope" development "$(jq -r '.findings[]|select(.native_id=="1").package.scope' <<<"$r")"
+assert_eq "dependabot identifiers" '["CVE-2024-1","GHSA-AAAA"]' "$(jq -c '.findings[]|select(.native_id=="1").identifiers' <<<"$r")"
+assert_eq "dependabot exact range is version" 1.2.3 "$(jq -r '.findings[]|select(.native_id=="1").package.version' <<<"$r")"
+assert_eq "code scanning falls back to rule.severity" warning "$(jq -r '.findings[]|select(.native_id=="7").severity_raw' <<<"$r")"
+assert_eq "code scanning location" 'src/A.java:12' "$(jq -r '.findings[]|select(.native_id=="7").locations[0]|"\(.file):\(.line)"' <<<"$r")"
+assert_eq "secret is policy critical" policy "$(jq -r '.findings[]|select(.kind=="secret").severity_origin' <<<"$r")"
+assert_eq "secret has no locations" 0 "$(jq '.findings[]|select(.kind=="secret").locations|length' <<<"$r")"
+assert_contains "gh api carries --hostname" "--hostname github.com" "$(cat "$ARGV_LOG")"
+assert_contains "gh api uses explicit path" "repos/o/r/dependabot/alerts" "$(cat "$ARGV_LOG")"
+echo 1 > "$GHFIX/code-scanning.rc"; echo "Code scanning is not enabled for this repository" > "$GHFIX/code-scanning.msg"
+r=$(si_source_github github.com o/r)
+assert_eq "one read 403 -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "failed read named" 'HTTP 403: Code scanning is not enabled for this repository' "$(jq -r '.source.reads[]|select(.name=="code-scanning").reason' <<<"$r")"
+printf '[]' > "$GHFIX/dependabot.json"; : > "$GHFIX/code-scanning.rc"
+r=$(si_source_github github.com o/r)
+assert_eq "empty array read is ok" ok "$(jq -r '.source.reads[]|select(.name=="dependabot").status' <<<"$r")"
+out=$(SECURITY_INSIGHTS_LIB= KNOWN_GH=github.com "$BASH" "$SCRIPT" --repo "$REPO")
+assert_eq "collect includes github source" 1 "$(jq '[.sources[]|select(.name=="github" and .status=="ok")]|length' <<<"$out")"
+for e in dependabot code-scanning secret-scanning; do echo 1 > "$GHFIX/$e.rc"; done
+assert_eq "all reads fail -> skipped" skipped "$(si_source_github github.com o/r | jq -r .source.status)"
+assert_eq "gh absent -> skipped" "gh not installed" "$(PATH="$NOGH" si_source_github github.com o/r | jq -r .source.reason)"
+assert_eq "gh unauthenticated -> skipped" "gh auth status --hostname github.com failed: not logged in" "$(KNOWN_GH= si_source_github github.com o/r | jq -r .source.reason)"
 
 echo
 printf 'Total: %d pass, %d fail\n' "$PASS" "$FAIL"

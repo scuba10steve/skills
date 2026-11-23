@@ -182,6 +182,81 @@ si_shape() {
     jq -c "$SI_SHAPE_JQ"
 }
 
+SI_READ_JSON="" SI_READ_REASON=""
+
+# si_gh_read <host> <path> <endpoint> -> SI_READ_JSON (array) or SI_READ_REASON on failure
+si_gh_read() {
+    local host="$1" path="$2" endpoint="$3" errf out rc=0 err msg code
+    errf=$(mktemp "${TMPDIR:-/tmp}/si-gh.XXXXXX")
+    out=$(gh api --hostname "$host" "repos/$path/$endpoint?state=open&per_page=100" --paginate --jq '.[]' 2>"$errf") || rc=$?
+    err=$(head -n 1 "$errf")
+    rm -f "$errf"
+    SI_READ_JSON="" SI_READ_REASON=""
+    if [[ "$rc" -eq 0 ]]; then
+        SI_READ_JSON=$(jq -sc '.' <<<"$out" 2>/dev/null) || SI_READ_REASON="unparseable response"
+        return 0
+    fi
+    msg=$(jq -r '.message // empty' <<<"$out" 2>/dev/null | head -n 1) || msg=""
+    [[ -n "$msg" ]] || msg="$err"
+    code=$(sed -n 's/.*(HTTP \([0-9][0-9]*\)).*/\1/p' <<<"$err" | head -n 1)
+    SI_READ_REASON="HTTP ${code:-?}: $msg"
+}
+
+SI_GH_MAP='
+def dependabot:
+  {source: "github", native_id: (.number | tostring), kind: "dependency",
+   severity_raw: .security_advisory.severity, severity_origin: "source",
+   title: .security_advisory.summary,
+   package: {name: .dependency.package.name,
+             version: ((.security_vulnerability.vulnerable_version_range // "") | capture("^= (?<v>[^ ,]+)$").v? // null),
+             fix_version: (.security_vulnerability.first_patched_version.identifier // null),
+             depth: null, scope: (.dependency.scope // null)},
+   identifiers: ([.security_advisory.cve_id, .security_advisory.ghsa_id] | map(select(. != null))),
+   locations: [{file: .dependency.manifest_path, line: null}],
+   url: .html_url, solution: null, epss: null, as_of: null};
+def code_scanning:
+  {source: "github", native_id: (.number | tostring), kind: "code",
+   severity_raw: (.rule.security_severity_level // .rule.severity), severity_origin: "source",
+   title: (.rule.description // .rule.id),
+   package: null, identifiers: [.rule.id],
+   locations: [{file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}],
+   url: .html_url, solution: null, epss: null, as_of: null};
+def secret_scanning:
+  {source: "github", native_id: (.number | tostring), kind: "secret",
+   severity_raw: "n/a (secret)", severity_origin: "policy",
+   title: (.secret_type_display_name // .secret_type),
+   package: null, identifiers: [.secret_type], locations: [],
+   url: .html_url, solution: null, epss: null, as_of: null};
+'
+
+si_source_github() {
+    local host="$1" path="$2" endpoint filter err reads="[]" findings="[]" reasons="" ok=0 total=0
+    command -v gh >/dev/null 2>&1 || { si_skipped github "gh not installed"; return 0; }
+    err=$(gh auth status --hostname "$host" 2>&1 >/dev/null) || {
+        si_skipped github "gh auth status --hostname $host failed: $(printf '%s\n' "$err" | head -n 1)"
+        return 0
+    }
+    for endpoint in dependabot code-scanning secret-scanning; do
+        filter="${endpoint//-/_}"
+        total=$((total+1))
+        si_gh_read "$host" "$path" "$endpoint/alerts"
+        if [[ -n "$SI_READ_REASON" ]]; then
+            reads=$(jq -c --arg n "$endpoint" --arg r "$SI_READ_REASON" '. + [{name: $n, status: "skipped", reason: $r}]' <<<"$reads")
+            if [[ -n "$reasons" ]]; then reasons="$reasons; $SI_READ_REASON"; else reasons="$SI_READ_REASON"; fi
+        else
+            ok=$((ok+1))
+            reads=$(jq -c --arg n "$endpoint" '. + [{name: $n, status: "ok"}]' <<<"$reads")
+            findings=$(jq -c --argjson new "$SI_READ_JSON" "$SI_GH_MAP"' . + [$new[] | '"$filter"']' <<<"$findings")
+        fi
+    done
+    jq -nc --argjson reads "$reads" --argjson findings "$findings" --arg reasons "$reasons" --argjson ok "$ok" --argjson total "$total" '
+        {source: {name: "github",
+                  status: (if $ok == $total then "ok" elif $ok > 0 then "partial" else "skipped" end),
+                  reason: (if $ok == 0 then $reasons else null end),
+                  count: 0, reads: $reads},
+         findings: $findings}'
+}
+
 si_collect() {
     local dir="$1" repo forge host reason results=""
     repo=$(si_repo_json "$dir")
@@ -191,6 +266,9 @@ si_collect() {
         if [[ -n "$host" ]]; then reason="host $host is not known to gh or glab"; else reason="no git remote"; fi
         results="$(si_skipped gitlab "$reason")
 $(si_skipped github "$reason")"
+    fi
+    if [[ "$forge" == "github" ]]; then
+        results="$(si_source_github "$host" "$(jq -r .path <<<"$repo")")"
     fi
     printf '%s\n' "$results" | jq -sc --argjson repo "$repo" '{repo: $repo, results: .}' | si_shape
 }
