@@ -418,18 +418,20 @@ si_mod_table() {
     esac
 }
 
-# si_mod_ecosystems <dir> -> ecosystems whose manifest markers sit at the root of dir, one per line
+# si_mod_ecosystems <dir> -> ecosystems with a manifest marker within three levels below dir, one per line
 si_mod_ecosystems() {
-    local dir="$1" eco pat f
-    local -a pats
+    local dir="$1" eco pat hit
+    local -a pats args
     for eco in java nodejs python golang csharp; do
         read -r -a pats <<<"$(si_mod_markers "$eco")"
-        for pat in "${pats[@]}"; do
-            for f in "$dir"/$pat; do
-                if [[ -f "$f" ]]; then echo "$eco"; continue 3; fi
-            done
-        done
+        args=()
+        for pat in "${pats[@]}"; do args+=(-o -name "$pat"); done
+        hit=$(find "$dir" -mindepth 1 -maxdepth 4 \
+            \( -type d \( -name node_modules -o -name .git -o -name build -o -name target -o -name dist -o -name out -o -name vendor \) -prune \) \
+            -o -type f \( -false "${args[@]}" \) -print -quit 2>/dev/null)
+        [[ -n "$hit" ]] && echo "$eco"
     done
+    return 0
 }
 
 SI_MOD_MAP='

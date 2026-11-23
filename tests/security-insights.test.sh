@@ -48,6 +48,11 @@ PYREPO="$TMPHOME/py";       mkrepo "$PYREPO";    : > "$PYREPO/requirements.txt"
 GOREPO="$TMPHOME/go";       mkrepo "$GOREPO";    : > "$GOREPO/go.mod"
 CSREPO="$TMPHOME/cs";       mkrepo "$CSREPO";    : > "$CSREPO/App.csproj"
 CSSUBREPO="$TMPHOME/cssub"; mkrepo "$CSSUBREPO"; mkdir "$CSSUBREPO/sub" "$CSSUBREPO/Dir.csproj"; : > "$CSSUBREPO/sub/Other.csproj"
+DEEPREPO="$TMPHOME/deep";   mkrepo "$DEEPREPO";  mkdir "$DEEPREPO/web"; : > "$DEEPREPO/web/package.json"
+DEEPMIX="$TMPHOME/deepmix"; mkrepo "$DEEPMIX";   mkdir "$DEEPMIX/frontend"; : > "$DEEPMIX/build.gradle"; : > "$DEEPMIX/frontend/package.json"
+NMREPO="$TMPHOME/nm";       mkrepo "$NMREPO";    mkdir -p "$NMREPO/node_modules/x"; : > "$NMREPO/node_modules/x/package.json"
+TOODEEP="$TMPHOME/toodeep"; mkrepo "$TOODEEP";   mkdir -p "$TOODEEP/a/b/c/d"; : > "$TOODEEP/a/b/c/d/package.json"
+BUILDREPO="$TMPHOME/bld";   mkrepo "$BUILDREPO"; mkdir "$BUILDREPO/build"; : > "$BUILDREPO/build/package.json"
 MIXREPO="$TMPHOME/mix";     mkrepo "$MIXREPO";   : > "$MIXREPO/build.gradle"; : > "$MIXREPO/package.json"
 
 GHFIX="$TMPHOME/ghfix"; mkdir "$GHFIX"; export GHFIX
@@ -225,7 +230,7 @@ chmod +x "$TMPHOME/forge-stub" "$STUB/mod"
 mkpath() {
     local dir="$1" skip="$2" c p
     mkdir -p "$dir"
-    for c in jq git sort paste grep sed tr cat mktemp date basename dirname head rm mv; do
+    for c in jq git sort paste grep sed tr cat mktemp date basename dirname head rm mv find; do
         [[ "$c" == "$skip" ]] && continue
         p=$(command -v "$c") && ln -s "$p" "$dir/$c"
     done
@@ -508,7 +513,12 @@ assert_eq "nodejs detected" nodejs "$(si_mod_ecosystems "$NODEREPO")"
 assert_eq "python detected" python "$(si_mod_ecosystems "$PYREPO")"
 assert_eq "golang detected" golang "$(si_mod_ecosystems "$GOREPO")"
 assert_eq "csharp detected by csproj glob" csharp "$(si_mod_ecosystems "$CSREPO")"
-assert_eq "csproj in subdir or as a directory is not detected" "" "$(si_mod_ecosystems "$CSSUBREPO")"
+assert_eq "csproj one level down is detected, a csproj directory is not" csharp "$(si_mod_ecosystems "$CSSUBREPO")"
+assert_eq "package.json one level down is detected" nodejs "$(si_mod_ecosystems "$DEEPREPO")"
+assert_eq "root gradle plus nested package.json" $'java\nnodejs' "$(si_mod_ecosystems "$DEEPMIX")"
+assert_eq "node_modules is skipped" "" "$(si_mod_ecosystems "$NMREPO")"
+assert_eq "four levels down is not searched" "" "$(si_mod_ecosystems "$TOODEEP")"
+assert_eq "build directory is skipped" "" "$(si_mod_ecosystems "$BUILDREPO")"
 assert_eq "two ecosystems in order" $'java\nnodejs' "$(si_mod_ecosystems "$MIXREPO")"
 assert_eq "mod absent" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$JVMREPO" 0 | reason_of)"
 assert_eq "mod probed before ecosystem detection" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$REPO" 0 | reason_of)"
