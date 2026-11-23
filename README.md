@@ -14,6 +14,7 @@ A set of agent skills for working with pull requests, code review, research and 
 | `outside-voice` | Send the current work to a different AI harness for a read-only review and relay it verbatim. |
 | `spec-and-plan` | Drive work through spec, outside review, plan and outside review, then execute on approval. |
 | `open-work` | Show your open PRs/MRs and assigned issues across GitHub and GitLab, joined to local sessions where detectable. |
+| `security-insights` | Aggregate open vulnerability findings for the current repo from its forge and Moderne, merged and ranked, with remediation guidance. |
 | `open-reviews` | Show the PRs/MRs waiting on your review across GitHub and GitLab. |
 | `open-prs` | List open PRs/MRs for the current repo, grouped by label. |
 | `open-issues` | List open issues for the current repo, grouped by label. |
@@ -81,6 +82,7 @@ Or copy the folders in `skills/` into your harness's skills directory.
 
 - `git` and `jq`.
 - `gh` and/or `glab`, optional, for the PR/MR/issue skills.
+- `mod` (Moderne CLI), optional, for the Moderne source of `security-insights`.
 - Optional reviewer CLIs for `outside-voice`: `claude`, `gemini`, `codex`, `opencode`, `kiro-cli`, and `glab` for the `duo` target (runs `glab duo cli`).
 - The superpowers plugin, for `spec-and-plan`.
 
@@ -101,7 +103,7 @@ Path: `${XDG_CONFIG_HOME:-~/.config}/scuba10steve-skills/policy`. Format: `key=v
 | Key | Values | Governs | Skills |
 |---|---|---|---|
 | `fan_out` | `allow` / `deny` / `ask` | parallel subagents for large inputs | `clean-comments` (sweep > 20 files) |
-| `deep_budget` | `allow` / `deny` / `ask` | expensive budget tiers | `research` (deep budget), `task-estimate` (deep-scope subagent) |
+| `deep_budget` | `allow` / `deny` / `ask` | expensive budget tiers | `research` (deep budget), `task-estimate` (deep-scope subagent), `security-insights` (Moderne build and recipe run) |
 | `multi_target` | `allow` / `deny` / `ask` | multi-target outside reviews | `outside-voice`, `spec-and-plan` |
 | `review_targets` | comma list | default reviewer targets when none are named | `outside-voice`, `spec-and-plan` |
 | `review_model` | `auto` / `<model-id>` / unset | reviewer model passed to kiro | `outside-voice`, `spec-and-plan` |
