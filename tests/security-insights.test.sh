@@ -68,7 +68,7 @@ chmod +x "$STUB"/*
 mkpath() {
     local dir="$1" skip="$2" c p
     mkdir -p "$dir"
-    for c in jq git sort paste grep sed tr cat mktemp date basename dirname; do
+    for c in jq git sort paste grep sed tr cat mktemp date basename dirname head; do
         [[ "$c" == "$skip" ]] && continue
         p=$(command -v "$c") && ln -s "$p" "$dir/$c"
     done
@@ -95,6 +95,10 @@ rc=0; out=$(PATH="$NOJQ" "$BASH" "$SCRIPT" --repo "$REPO" 2>&1) || rc=$?
 assert_eq "missing jq exits 1" 1 "$rc"; assert_contains "missing jq names jq" "jq is required" "$out"
 out=$(SECURITY_INSIGHTS_LIB=1 "$BASH" -c 'source "$1"' _ "$SCRIPT" 2>&1)
 assert_not_contains "library mode does not dispatch" '"repo"' "$out"
+
+rc=0; out=$(PATH="$NOGLAB" "$BASH" "$SCRIPT" --repo "$REPO" 2>&1) || rc=$?
+assert_eq "runs without glab on PATH" 0 "$rc"
+assert_eq "output without glab parses as JSON" github "$(jq -r .repo.forge <<<"$out" 2>/dev/null)"
 
 echo "si_parse_remote"
 SECURITY_INSIGHTS_LIB=1 source "$SCRIPT"
