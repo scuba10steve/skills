@@ -202,6 +202,7 @@ assert_eq "package null for code" null "$(shape "$(one_finding github 42 code hi
 # identifiers and containers
 i=$(shape "$(ids_finding github 5 code 'cve-2024-9' 'js/sql-injection' 'ghsa-zzzz')")
 assert_eq "only CVE/GHSA upper-cased" '["CVE-2024-9","js/sql-injection","GHSA-ZZZZ"]' "$(jq -c '.findings[0].identifiers' <<<"$i")"
+assert_eq "code finding with a CVE keeps the native key" "github:code:5" "$(jq -r '.findings[0].key' <<<"$i")"
 assert_eq "unidentified containers do not merge" 2 "$(shape "$(two_containers gitlab '' github '')" | jq '.findings|length')"
 assert_eq "unidentified container key" "gitlab:container:gid://gitlab/Vulnerability/8" "$(shape "$(one_container gitlab 'gid://gitlab/Vulnerability/8' '')" | jq -r '.findings[0].key')"
 assert_eq "containers merge on CVE" 1 "$(shape "$(two_containers gitlab CVE-2024-3 github CVE-2024-3)" | jq '.findings|length')"

@@ -142,11 +142,13 @@ def merge:
   | ([.[].adv[]] | unique) as $adv
   | (sort_by(.severity | sev_rank) | .[0]) as $worst
   | [.[] | select(.package.fix_version != null) | {source, version: .package.fix_version}] as $fixes
-  | {key: (first($adv[] | select(startswith("CVE-")))
-           // first($adv[] | select(startswith("GHSA-")))
-           // (if $first.kind == "dependency" and $first.package != null
-               then "pkg:\($first.package.name)@\($first.package.version)"
-               else "\($first.source):\($first.kind):\($first.native_id)" end)),
+  | "\($first.source):\($first.kind):\($first.native_id)" as $native_key
+  | {key: (if $first.kind | IN("dependency", "container") | not then $native_key
+           else first($adv[] | select(startswith("CVE-")))
+                // first($adv[] | select(startswith("GHSA-")))
+                // (if $first.kind == "dependency" and $first.package != null
+                    then "pkg:\($first.package.name)@\($first.package.version)"
+                    else $native_key end) end),
      severity: $worst.severity,
      severity_origin: $worst.severity_origin,
      title: $first.title,
