@@ -185,7 +185,7 @@ chmod +x "$STUB"/*
 mkpath() {
     local dir="$1" skip="$2" c p
     mkdir -p "$dir"
-    for c in jq git sort paste grep sed tr cat mktemp date basename dirname head; do
+    for c in jq git sort paste grep sed tr cat mktemp date basename dirname head rm mv; do
         [[ "$c" == "$skip" ]] && continue
         p=$(command -v "$c") && ln -s "$p" "$dir/$c"
     done
@@ -364,7 +364,7 @@ assert_eq "code scanning falls back to rule.severity" warning "$(jq -r '.finding
 assert_eq "code scanning location" 'src/A.java:12' "$(jq -r '.findings[]|select(.native_id=="7").locations[0]|"\(.file):\(.line)"' <<<"$r")"
 assert_eq "secret is policy critical" policy "$(jq -r '.findings[]|select(.kind=="secret").severity_origin' <<<"$r")"
 assert_eq "secret has no locations" 0 "$(jq '.findings[]|select(.kind=="secret").locations|length' <<<"$r")"
-assert_contains "gh api carries --hostname" "--hostname github.com" "$(cat "$ARGV_LOG")"
+assert_contains "gh api carries --hostname" "gh api --hostname github.com repos/o/r/" "$(cat "$ARGV_LOG")"
 assert_contains "gh api uses explicit path" "repos/o/r/dependabot/alerts" "$(cat "$ARGV_LOG")"
 echo 1 > "$GHFIX/code-scanning.rc"; echo "Code scanning is not enabled for this repository" > "$GHFIX/code-scanning.msg"
 r=$(si_source_github github.com o/r)
@@ -378,7 +378,6 @@ r=$(si_source_github github.com o/r)
 assert_contains "unmappable read is skipped as not understood" "github output not understood: " "$(jq -r '.source.reads[]|select(.name=="secret-scanning").reason' <<<"$r")"
 assert_eq "unmappable read leaves source partial" partial "$(jq -r .source.status <<<"$r")"
 cp "$GHFIX/secret-scanning.good" "$GHFIX/secret-scanning.json"
-cp "$GHFIX/dependabot.json" "$GHFIX/dependabot.small"
 jq -n '[range(300) | {number: ., html_url: "https://github.com/o/r/security/dependabot/\(.)",
     security_advisory: {severity: "high", summary: "advisory \(.)", cve_id: "CVE-2024-\(.)", ghsa_id: "GHSA-\(.)",
                         description: ("x" * 4000)},
@@ -387,7 +386,7 @@ jq -n '[range(300) | {number: ., html_url: "https://github.com/o/r/security/depe
 r=$(si_source_github github.com o/r 2>&1)
 assert_eq "300 alerts -> ok" ok "$(jq -r .source.status <<<"$r" 2>/dev/null)"
 assert_eq "300 alerts -> 300 dependabot findings" 300 "$(jq '[.findings[]|select(.kind=="dependency")]|length' <<<"$r" 2>/dev/null)"
-cp "$GHFIX/dependabot.small" "$GHFIX/dependabot.json"; printf '[]' > "$GHFIX/dependabot.json"
+printf '[]' > "$GHFIX/dependabot.json"
 out=$(SECURITY_INSIGHTS_LIB= KNOWN_GH=github.com "$BASH" "$SCRIPT" --repo "$REPO")
 assert_eq "collect includes github source" 1 "$(jq '[.sources[]|select(.name=="github" and .status=="ok")]|length' <<<"$out")"
 for e in dependabot code-scanning secret-scanning; do echo 1 > "$GHFIX/$e.rc"; done
@@ -406,7 +405,7 @@ export KNOWN_GL=gitlab.example.com
 : > "$ARGV_LOG"
 r=$(si_source_gitlab gitlab.example.com group/sub/repo)
 assert_eq "two pages read" 2 "$(grep -c 'api graphql' "$ARGV_LOG")"
-assert_contains "graphql call carries --hostname" "--hostname gitlab.example.com" "$(cat "$ARGV_LOG")"
+assert_contains "graphql call carries --hostname" "glab api graphql --hostname gitlab.example.com" "$(cat "$ARGV_LOG")"
 assert_contains "graphql call passes fullPath" "fullPath=group/sub/repo" "$(cat "$ARGV_LOG")"
 assert_contains "page 2 passes the cursor" "after=c1" "$(cat "$ARGV_LOG")"
 assert_eq "status ok" ok "$(jq -r .source.status <<<"$r")"
@@ -477,7 +476,7 @@ assert_eq "rows for other repo dropped" 2 "$(jq '.findings|length' <<<"$r")"
 assert_eq "empty cve cell -> no advisory id" 0 "$(jq '.findings[1].identifiers|map(select(startswith("CVE-")))|length' <<<"$r")"
 assert_eq "empty identifiers is an array" '[]' "$(jq -c '.findings[1].identifiers' <<<"$r")"
 assert_eq "empty fixedVersion is null" null "$(jq -c '.findings[1].package.fix_version' <<<"$r")"
-assert_eq "depth lower-cased" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
+assert_eq "numeric depth 2 maps to transitive" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
 assert_eq "epss number" 0.42 "$(jq -c '.findings[0].epss' <<<"$r")"
 assert_eq "epss null" null "$(jq -c '.findings[1].epss' <<<"$r")"
 assert_eq "native id by row index" "VulnerabilityReport:row:0" "$(jq -r '.findings[0].native_id' <<<"$r")"
