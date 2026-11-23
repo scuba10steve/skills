@@ -40,6 +40,7 @@ mkdir "$REPO/sub"
 NOREMOTE="$TMPHOME/noremote"; mkrepo "$NOREMOTE"
 JVMREPO="$TMPHOME/jvm";     mkrepo "$JVMREPO"
 : > "$JVMREPO/pom.xml"
+git -C "$JVMREPO" remote add origin https://github.com/o/jvm.git
 
 GHFIX="$TMPHOME/ghfix"; mkdir "$GHFIX"; export GHFIX
 cat > "$GHFIX/dependabot.json" <<'JSON'
@@ -89,6 +90,30 @@ JSON
 cat > "$GLFIX/null_vulns.json" <<'JSON'
 {"data":{"project":{"vulnerabilities":null}}}
 JSON
+MODFIX="$TMPHOME/modfix"; mkdir "$MODFIX"; export MODFIX
+cat > "$MODFIX/list_good.json" <<'JSON'
+[{"origin":"github.com","path":"o/jvm","branch":"main","rootDir":"file:///work/jvm"}]
+JSON
+cat > "$MODFIX/history_good.json" <<'JSON'
+{"20261119090000-zzzzz":{"recipeId":"org.openrewrite.java.format.AutoFormat","recipeOptions":{},"dataTablesProduced":[]},
+ "20261120140200-abcde":{"recipeId":"org.openrewrite.java.dependencies.DependencyVulnerabilityCheck","recipeOptions":{"scope":"test"},
+  "dataTablesProduced":["org.openrewrite.java.dependencies.table.VulnerabilityReport"]}}
+JSON
+cat > "$MODFIX/history_other_recipe.json" <<'JSON'
+{"20261119090000-zzzzz":{"recipeId":"org.openrewrite.java.format.AutoFormat","recipeOptions":{},"dataTablesProduced":[]}}
+JSON
+cat > "$MODFIX/history_noscope.json" <<'JSON'
+{"20261120140200-abcde":{"recipeId":"org.openrewrite.java.dependencies.DependencyVulnerabilityCheck","recipeOptions":{},
+  "dataTablesProduced":["org.openrewrite.java.dependencies.table.VulnerabilityReport"]}}
+JSON
+cat > "$MODFIX/study.json" <<'JSON'
+[
+{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"CVE-2024-1","groupId":"org.example","artifactId":"lib","version":"1.2.3","fixedVersion":"1.2.4","lastAffectedVersion":"1.2.3","versionWithinDelta":"","summary":"Lib is vulnerable","severity":"CRITICAL","depth":"Transitive","CWEs":"CWE-79, 611","epss":0.42},
+{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"","groupId":"org.example","artifactId":"other","version":"2.0.0","fixedVersion":"","lastAffectedVersion":"2.0.0","versionWithinDelta":"","summary":"Other is vulnerable","severity":"MODERATE","depth":"Direct","CWEs":"","epss":null},
+{"repositoryOrigin":"github.com","repositoryPath":"o/elsewhere","repositoryBranch":"main","projectName":"x","cve":"CVE-2024-9","groupId":"org.example","artifactId":"far","version":"9.0.0","fixedVersion":"9.0.1","lastAffectedVersion":"9.0.0","versionWithinDelta":"","summary":"Far","severity":"HIGH","depth":"Direct","CWEs":"","epss":0.1}
+]
+JSON
+cp "$MODFIX/list_good.json" "$MODFIX/list.json"; cp "$MODFIX/history_good.json" "$MODFIX/history.json"
 reset_counter() { rm -f "$GLFIX/counter"; }
 
 ARGV_LOG="$TMPHOME/argv.log"; export ARGV_LOG
@@ -134,6 +159,12 @@ done
 cat > "$STUB/mod" <<'FAKE'
 #!/usr/bin/env bash
 echo "mod $*" >> "$ARGV_LOG"
+case "$1" in
+    list) cat "$MODFIX/list.json" ;;
+    run-history) cat "$MODFIX/history.json" ;;
+    study) cat "$MODFIX/study.json" ;;
+    build|run) if [[ -f "$MODFIX/$1.rc" ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi ;;
+esac
 exit 0
 FAKE
 chmod +x "$STUB"/*
@@ -358,6 +389,51 @@ assert_contains "partial reason names page" "page 2 failed:" "$(jq -r .source.re
 assert_eq "page 1 findings kept" 2 "$(jq '.findings|length' <<<"$r")"
 assert_eq "glab absent -> skipped" "glab not installed" "$(PATH="$NOGLAB" si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
 assert_eq "glab unauthenticated -> skipped" "glab auth status --hostname gitlab.example.com failed: not logged in" "$(KNOWN_GL= si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
+
+echo "si_source_moderne"
+assert_eq "not a JVM project" "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only" "$(si_source_moderne "$REPO" 0 | jq -r .source.reason)"
+assert_eq "mod absent" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
+printf '[]' > "$MODFIX/list.json"
+assert_eq "no LST" "no Moderne LST for this repository; run: mod build ." "$(si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
+cp "$MODFIX/list_good.json" "$MODFIX/list.json"; cp "$MODFIX/history_other_recipe.json" "$MODFIX/history.json"
+assert_eq "no DVC run" "no DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck" "$(si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
+printf 'not json' > "$MODFIX/history.json"
+assert_eq "unparseable history" "run-history output not understood" "$(si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
+cp "$MODFIX/history_good.json" "$MODFIX/history.json"
+: > "$ARGV_LOG"; r=$(si_source_moderne "$JVMREPO" 0)
+assert_contains "study uses --recipe-run" "--recipe-run=20261120140200-abcde" "$(cat "$ARGV_LOG")"
+assert_not_contains "study never uses --last-recipe-run" "--last-recipe-run" "$(cat "$ARGV_LOG")"
+assert_not_contains "no build without flag" "mod build" "$(cat "$ARGV_LOG")"
+assert_eq "status ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "cve identifier" "CVE-2024-1" "$(jq -r '.findings[0].identifiers[0]' <<<"$r")"
+assert_eq "package colon form" "org.example:lib" "$(jq -r '.findings[0].package.name' <<<"$r")"
+assert_eq "fix version" "1.2.4" "$(jq -r '.findings[0].package.fix_version' <<<"$r")"
+assert_eq "MODERATE raw kept" MODERATE "$(jq -r '.findings[1].severity_raw' <<<"$r")"
+assert_eq "CWEs split into identifiers" 2 "$(jq '.findings[0].identifiers|map(select(startswith("CWE-")))|length' <<<"$r")"
+assert_eq "bare CWE digits prefixed" '["CVE-2024-1","CWE-79","CWE-611"]' "$(jq -c '.findings[0].identifiers' <<<"$r")"
+assert_eq "as_of derived from run id" true "$(jq '.findings[0].as_of|startswith("2026-11-20T14:02:00")' <<<"$r")"
+assert_eq "as_of carries a UTC offset" true "$(jq '.findings[0].as_of|test("T14:02:00[+-][0-9]{2}:[0-9]{2}$")' <<<"$r")"
+assert_eq "rows for other repo dropped" 2 "$(jq '.findings|length' <<<"$r")"
+assert_eq "empty cve cell -> no advisory id" 0 "$(jq '.findings[1].identifiers|map(select(startswith("CVE-")))|length' <<<"$r")"
+assert_eq "empty identifiers is an array" '[]' "$(jq -c '.findings[1].identifiers' <<<"$r")"
+assert_eq "empty fixedVersion is null" null "$(jq -c '.findings[1].package.fix_version' <<<"$r")"
+assert_eq "depth lower-cased" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
+assert_eq "epss number" 0.42 "$(jq -c '.findings[0].epss' <<<"$r")"
+assert_eq "epss null" null "$(jq -c '.findings[1].epss' <<<"$r")"
+assert_eq "native id by row index" "VulnerabilityReport:row:0" "$(jq -r '.findings[0].native_id' <<<"$r")"
+assert_eq "scope from run options" test "$(jq -r '.findings[0].package.scope' <<<"$r")"
+cp "$MODFIX/history_noscope.json" "$MODFIX/history.json"
+assert_eq "scope null when run has none" null "$(si_source_moderne "$JVMREPO" 0 | jq -r '.findings[0].package.scope')"
+cp "$MODFIX/history_good.json" "$MODFIX/history.json"
+: > "$ARGV_LOG"; si_source_moderne "$JVMREPO" 1 >/dev/null
+assert_eq "--moderne-run builds then runs" "mod build|mod run" "$(grep -oE 'mod (build|run) ' "$ARGV_LOG" | sed 's/ $//' | paste -sd'|' -)"
+: > "$MODFIX/build.rc"
+assert_eq "build failure skips" "mod build failed: build exploded" "$(si_source_moderne "$JVMREPO" 1 2>/dev/null | jq -r .source.reason)"
+rm -f "$MODFIX/build.rc"; : > "$MODFIX/run.rc"
+assert_eq "run failure skips" "mod run failed: run exploded" "$(si_source_moderne "$JVMREPO" 1 2>/dev/null | jq -r .source.reason)"
+rm -f "$MODFIX/run.rc"
+out=$(SECURITY_INSIGHTS_LIB= "$BASH" "$SCRIPT" --repo "$JVMREPO" 2>/dev/null)
+assert_eq "collect includes moderne source" 1 "$(jq '[.sources[]|select(.name=="moderne" and .status=="ok")]|length' <<<"$out")"
 
 echo
 printf 'Total: %d pass, %d fail\n' "$PASS" "$FAIL"

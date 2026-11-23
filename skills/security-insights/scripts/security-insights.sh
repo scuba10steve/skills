@@ -357,8 +357,93 @@ si_source_gitlab() {
     rm -rf "$work"
 }
 
+SI_MOD_RECIPE=org.openrewrite.java.dependencies.DependencyVulnerabilityCheck
+SI_MOD_TABLE=org.openrewrite.java.dependencies.table.VulnerabilityReport
+SI_MOD_RH_RECIPE_PATH='.recipeId'
+SI_MOD_RH_SCOPE_PATH='.recipeOptions.scope'
+SI_MOD_ROW_PATH_COL=repositoryPath
+
+SI_MOD_MAP='
+def opt: if . == null or . == "" then null else . end;
+def cwes: (.CWEs // "" | tostring) | [splits("[,;]")] | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))
+          | map(if test("^[0-9]+$") then "CWE-" + . else . end);
+[to_entries[] | .key as $i | .value
+ | select(.[$col] == $path and .repositoryOrigin == $origin)
+ | {source: "moderne", native_id: "VulnerabilityReport:row:\($i)", kind: "dependency",
+    severity_raw: .severity, severity_origin: "source",
+    title: ((.summary | opt) // .cve),
+    package: {name: "\(.groupId):\(.artifactId)", version: (.version | opt),
+              fix_version: (.fixedVersion | opt),
+              depth: (.depth | opt | if . == null then null else ascii_downcase end),
+              scope: $scope},
+    identifiers: ([.cve | opt] | map(select(. != null))) + cwes,
+    locations: [], url: null, solution: null,
+    epss: (.epss | if type == "number" then . elif type == "string" then (tonumber? // null) else null end),
+    as_of: $as_of}]
+'
+
+# si_mod_as_of <run id> -> local ISO-8601 time from the YYYYMMDDHHMMSS run id prefix
+si_mod_as_of() {
+    local ts="${1%%-*}" z
+    z=$(date +%z)
+    printf '%s-%s-%sT%s:%s:%s%s:%s' "${ts:0:4}" "${ts:4:2}" "${ts:6:2}" "${ts:8:2}" "${ts:10:2}" "${ts:12:2}" "${z:0:3}" "${z:3:2}"
+}
+
+si_source_moderne() {
+    local dir="$1" moderne_run="$2" work rc=0 listing history entry run_id scope origin path as_of
+    if [[ ! -f "$dir/pom.xml" && ! -f "$dir/build.gradle" && ! -f "$dir/build.gradle.kts" ]]; then
+        si_skipped moderne "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only"
+        return 0
+    fi
+    command -v mod >/dev/null 2>&1 || { si_skipped moderne "mod not installed"; return 0; }
+    work=$(mktemp -d "${TMPDIR:-/tmp}/si-mod.XXXXXX")
+    listing=$(mod list --json "$dir" 2>/dev/null) || rc=$?
+    origin=$(jq -r '.[0].origin // empty' <<<"$listing" 2>/dev/null) || origin=""
+    path=$(jq -r '.[0].path // empty' <<<"$listing" 2>/dev/null) || path=""
+    if [[ "$rc" -ne 0 || -z "$origin" || -z "$path" ]]; then
+        si_skipped moderne "no Moderne LST for this repository; run: mod build ."
+        rm -rf "$work"
+        return 0
+    fi
+    if [[ "$moderne_run" == 1 ]]; then
+        mod build "$dir" >&2 2>"$work/err" || {
+            si_skipped moderne "mod build failed: $(head -n 1 "$work/err")"; cat "$work/err" >&2; rm -rf "$work"; return 0; }
+        cat "$work/err" >&2
+        mod run "$dir" --recipe "$SI_MOD_RECIPE" >&2 2>"$work/err" || {
+            si_skipped moderne "mod run failed: $(head -n 1 "$work/err")"; cat "$work/err" >&2; rm -rf "$work"; return 0; }
+        cat "$work/err" >&2
+    fi
+    history=$(mod run-history --json --most-recent "$dir" 2>/dev/null) || history=""
+    if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$history"; then
+        si_skipped moderne "run-history output not understood"
+        rm -rf "$work"
+        return 0
+    fi
+    entry=$(jq -c --arg r "$SI_MOD_RECIPE" "[to_entries[] | select((.value | $SI_MOD_RH_RECIPE_PATH) == \$r)] | sort_by(.key) | last // empty" <<<"$history")
+    if [[ -z "$entry" ]]; then
+        si_skipped moderne "no DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe $SI_MOD_RECIPE"
+        rm -rf "$work"
+        return 0
+    fi
+    run_id=$(jq -r .key <<<"$entry")
+    scope=$(jq -c "(.value | $SI_MOD_RH_SCOPE_PATH) // null" <<<"$entry")
+    as_of=$(si_mod_as_of "$run_id")
+    rc=0
+    mod study "$dir" "--recipe-run=$run_id" --data-table "$SI_MOD_TABLE" --json >"$work/study.json" 2>"$work/err" || rc=$?
+    if [[ "$rc" -ne 0 ]] || ! jq -e 'type == "array"' "$work/study.json" >/dev/null 2>&1; then
+        si_skipped moderne "mod study failed: $(head -n 1 "$work/err")"
+        rm -rf "$work"
+        return 0
+    fi
+    jq -c --arg col "$SI_MOD_ROW_PATH_COL" --arg path "$path" --arg origin "$origin" --arg as_of "$as_of" \
+        --argjson scope "$scope" "$SI_MOD_MAP" "$work/study.json" > "$work/findings.json"
+    jq -nc --slurpfile findings "$work/findings.json" '
+        {source: {name: "moderne", status: "ok", reason: null, count: 0}, findings: $findings[0]}'
+    rm -rf "$work"
+}
+
 si_collect() {
-    local dir="$1" repo forge host reason results=""
+    local dir="$1" moderne_run="${2:-0}" repo forge host reason results=""
     repo=$(si_repo_json "$dir")
     forge=$(jq -r .forge <<<"$repo")
     host=$(jq -r '.host // ""' <<<"$repo")
@@ -373,6 +458,8 @@ $(si_skipped github "$reason")"
     if [[ "$forge" == "github" ]]; then
         results="$(si_source_github "$host" "$(jq -r .path <<<"$repo")")"
     fi
+    results="$results
+$(si_source_moderne "$dir" "$moderne_run")"
     printf '%s\n' "$results" | jq -sc --argjson repo "$repo" '{repo: $repo, results: .}' | si_shape
 }
 
