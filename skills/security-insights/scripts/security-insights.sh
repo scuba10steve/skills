@@ -73,15 +73,29 @@ si_parse_remote() {
     printf '%s\t%s\n' "$host" "$path"
 }
 
+# si_first_err <host> <rc>  (stderr text on stdin) -> first trimmed line that is not empty,
+# the bare host or a bare ERROR; else "exit <rc>, no error output"
+si_first_err() {
+    local host="$1" rc="$2" line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        if [[ -n "$line" && "$line" != "$host" && "$line" != "ERROR" ]]; then
+            printf '%s' "$line"; return 0
+        fi
+    done
+    printf 'exit %s, no error output' "$rc"
+}
+
 SI_GLAB_AUTH_RC="" SI_GH_AUTH_RC="" SI_GLAB_AUTH_ERR="" SI_GH_AUTH_ERR=""
 
 si_detect_forge() {
     local host="$1" err
     SI_GLAB_AUTH_RC=0 SI_GH_AUTH_RC=0 SI_GLAB_AUTH_ERR="" SI_GH_AUTH_ERR=""
     err=$(glab auth status --hostname "$host" 2>&1 >/dev/null) || SI_GLAB_AUTH_RC=$?
-    SI_GLAB_AUTH_ERR=$(printf '%s\n' "$err" | head -n 1)
+    SI_GLAB_AUTH_ERR=$(si_first_err "$host" "$SI_GLAB_AUTH_RC" <<<"$err")
     err=$(gh auth status --hostname "$host" 2>&1 >/dev/null) || SI_GH_AUTH_RC=$?
-    SI_GH_AUTH_ERR=$(printf '%s\n' "$err" | head -n 1)
+    SI_GH_AUTH_ERR=$(si_first_err "$host" "$SI_GH_AUTH_RC" <<<"$err")
     if [[ "$SI_GLAB_AUTH_RC" -eq 0 ]]; then printf 'gitlab'
     elif [[ "$SI_GH_AUTH_RC" -eq 0 ]]; then printf 'github'
     elif [[ "$host" == "github.com" ]]; then printf 'github'
@@ -225,7 +239,9 @@ def code_scanning:
   {source: "github", native_id: (.number | tostring), kind: "code",
    severity_raw: (.rule.security_severity_level // .rule.severity), severity_origin: "source",
    title: (.rule.description // .rule.id),
-   package: null, identifiers: [.rule.id],
+   package: null,
+   identifiers: ([.rule.id] + [(.rule.tags // [])[] | strings
+                 | capture("^external/cwe/cwe-0*(?<n>[0-9]+)$").n | "CWE-" + .]),
    locations: [{file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line}],
    url: .html_url, solution: null, epss: null, as_of: null};
 def secret_scanning:
@@ -237,12 +253,14 @@ def secret_scanning:
 '
 
 si_source_github() {
-    local host="$1" path="$2" endpoint filter err reads="[]" reasons="" ok=0 total=0 work acc
+    local host="$1" path="$2" endpoint filter err reads="[]" reasons="" ok=0 total=0 work acc rc
     command -v gh >/dev/null 2>&1 || { si_skipped github "gh not installed"; return 0; }
-    err=$(gh auth status --hostname "$host" 2>&1 >/dev/null) || {
-        si_skipped github "gh auth status --hostname $host failed: $(printf '%s\n' "$err" | head -n 1)"
+    rc=0
+    err=$(gh auth status --hostname "$host" 2>&1 >/dev/null) || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        si_skipped github "gh auth status --hostname $host failed: $(si_first_err "$host" "$rc" <<<"$err")"
         return 0
-    }
+    fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/si-gh.XXXXXX")
     acc="$work/acc.json"
     printf '[]' > "$acc"
@@ -304,7 +322,9 @@ def fix: (.solution // "") | capture("(?s)[Uu]pgrade.*?(?<v>[0-9]+(\\.[0-9]+)+)"
               then {name: ($l.dependency.package.name | if . == null then null else colon end),
                     version: ($l.dependency.version // null), fix_version: fix, depth: null, scope: null}
               else null end),
-    identifiers: [(.identifiers // [])[] | select((.externalType // "") | ascii_downcase | IN("cve", "ghsa", "cwe")) | .externalId],
+    identifiers: [(.identifiers // [])[] | ((.externalType // "") | ascii_downcase) as $t
+                  | select($t | IN("cve", "ghsa", "cwe")) | .externalId
+                  | if $t == "cwe" and (tostring | test("^[0-9]+$")) then "CWE-\(.)" else . end],
     locations: (if $k == "container" then (if $l.image != null then [{file: $l.image, line: null}] else [] end)
                 elif $l.file != null then [{file: $l.file, line: ($l.startLine // null)}] else [] end),
     url: .webUrl, solution: (.solution // null), epss: null, as_of: null}]
@@ -324,10 +344,12 @@ si_source_gitlab() {
     local host="$1" path="$2" cursor="" page=0 body err rc work acc status="ok" reason="" more
     local -a args
     command -v glab >/dev/null 2>&1 || { si_skipped gitlab "glab not installed"; return 0; }
-    err=$(glab auth status --hostname "$host" 2>&1 >/dev/null) || {
-        si_skipped gitlab "glab auth status --hostname $host failed: $(printf '%s\n' "$err" | head -n 1)"
+    rc=0
+    err=$(glab auth status --hostname "$host" 2>&1 >/dev/null) || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        si_skipped gitlab "glab auth status --hostname $host failed: $(si_first_err "$host" "$rc" <<<"$err")"
         return 0
-    }
+    fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/si-gl.XXXXXX")
     acc="$work/acc.json"
     printf '[]' > "$acc"

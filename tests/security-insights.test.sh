@@ -53,7 +53,7 @@ cat > "$GHFIX/dependabot.json" <<'JSON'
 JSON
 cat > "$GHFIX/code-scanning.json" <<'JSON'
 [{"number":7,"html_url":"https://github.com/o/r/security/code-scanning/7",
-  "rule":{"id":"java/sql-injection","severity":"warning","description":"SQL injection"},
+  "rule":{"id":"java/sql-injection","severity":"warning","description":"SQL injection","tags":["security","external/cwe/cwe-079"]},
   "most_recent_instance":{"location":{"path":"src/A.java","start_line":12}}}]
 JSON
 cat > "$GHFIX/secret-scanning.json" <<'JSON'
@@ -131,11 +131,13 @@ ARGV_LOG="$TMPHOME/argv.log"; export ARGV_LOG
 STUB="$TMPHOME/stub"; mkdir "$STUB"
 for cli in gh glab; do
     known=KNOWN_GH; [[ "$cli" == glab ]] && known=KNOWN_GL
+    preamble='echo "$4" >&2'; [[ "$cli" == glab ]] && preamble='echo >&2; echo ERROR >&2'
     cat > "$STUB/$cli" <<FAKE
 #!/usr/bin/env bash
 echo "$cli \$*" >> "\$ARGV_LOG"
 if [[ "\$1 \$2 \$3" == "auth status --hostname" ]]; then
     if [[ -n "\${$known:-}" && "\$4" == "\${$known}" ]]; then exit 0; fi
+    $preamble
     echo "not logged in" >&2
     exit 1
 fi
@@ -228,6 +230,9 @@ assert_eq "github.com fallback"         github  "$(si_detect_forge github.com)"
 assert_eq "gitlab substring fallback"   gitlab  "$(si_detect_forge gitlab.example.net)"
 assert_eq "unknown host"                unknown "$(si_detect_forge code.example.org)"
 assert_contains "auth probe passes --hostname" "glab auth status --hostname code.example.com" "$(cat "$ARGV_LOG")"
+
+assert_eq "first useful stderr line skips host and ERROR" "not logged in" "$(printf '\n  gl.example.com\nERROR\nnot logged in\n' | si_first_err gl.example.com 1)"
+assert_eq "no useful stderr line" "exit 4, no error output" "$(printf '\nERROR\n' | si_first_err gl.example.com 4)"
 
 echo "si_repo_json"
 assert_eq "forge from origin" github "$(si_repo_json "$REPO" | jq -r .forge)"
@@ -353,6 +358,7 @@ assert_eq "dependabot severity raw" high "$(jq -r '.findings[]|select(.native_id
 assert_eq "dependabot scope" development "$(jq -r '.findings[]|select(.native_id=="1").package.scope' <<<"$r")"
 assert_eq "dependabot identifiers" '["CVE-2024-1","GHSA-AAAA"]' "$(jq -c '.findings[]|select(.native_id=="1").identifiers' <<<"$r")"
 assert_eq "dependabot exact range is version" 1.2.3 "$(jq -r '.findings[]|select(.native_id=="1").package.version' <<<"$r")"
+assert_eq "code scanning CWE tag becomes CWE-n" '["java/sql-injection","CWE-79"]' "$(jq -c '.findings[]|select(.native_id=="7").identifiers' <<<"$r")"
 assert_eq "code scanning falls back to rule.severity" warning "$(jq -r '.findings[]|select(.native_id=="7").severity_raw' <<<"$r")"
 assert_eq "code scanning location" 'src/A.java:12' "$(jq -r '.findings[]|select(.native_id=="7").locations[0]|"\(.file):\(.line)"' <<<"$r")"
 assert_eq "secret is policy critical" policy "$(jq -r '.findings[]|select(.kind=="secret").severity_origin' <<<"$r")"
@@ -404,7 +410,7 @@ assert_eq "package name colon form" "org.example:lib" "$(jq -r '.findings[]|sele
 assert_eq "package version" 1.2.3 "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").package.version' <<<"$r")"
 assert_eq "fix version from solution" 1.2.4 "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").package.fix_version' <<<"$r")"
 assert_eq "identifiers keep only cve/ghsa/cwe" '["CVE-2024-1"]' "$(jq -c '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").identifiers' <<<"$r")"
-assert_eq "cwe identifier case-insensitive" '["89"]' "$(jq -c '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").identifiers' <<<"$r")"
+assert_eq "bare cwe id gains CWE- prefix" '["CWE-89"]' "$(jq -c '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").identifiers' <<<"$r")"
 assert_eq "INFO severity raw kept" Info "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").severity_raw' <<<"$r")"
 assert_eq "sast location" 'src/B.java:40' "$(jq -r '.findings[]|select(.kind=="code").locations[0]|"\(.file):\(.line)"' <<<"$r")"
 assert_eq "code package null" null "$(jq -c '.findings[]|select(.kind=="code").package' <<<"$r")"
