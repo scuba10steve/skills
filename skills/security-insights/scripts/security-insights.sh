@@ -11,7 +11,7 @@ Emits one JSON document: security findings for a repository, collected
 from the forge, dependency tooling and Moderne.
 
   --repo <path>   Repository to inspect (default: current directory)
-  --moderne-run   Allow Moderne recipe runs (slower, may cost credits)
+  --moderne-run   Forces a Moderne LST build and recipe run; minutes of JVM build
   -h, --help      This help
 USAGE
 }

@@ -22,11 +22,16 @@ Open vulnerability findings for the current repository from its forge and Modern
 
 2. **Collect.** Run `bash <skill-dir>/scripts/security-insights.sh`, where `<skill-dir>` is the directory containing this SKILL.md. It emits one JSON document.
    - Non-zero exit: show stderr and stop.
-   - A forge source's skip reason containing `x509` or `failed to verify certificate` means the harness sandbox blocked the CLI. The moderne source's reason starting `mod study failed:` with an empty message means the same under a harness that sandboxes shell commands. In both cases say so and re-run this one command with the harness's sandbox bypass, if it has one, rather than reporting the source as having no findings.
+   - The harness sandbox likely blocked the CLI when any of these holds:
+     - a forge skip reason contains `x509` or `failed to verify certificate`;
+     - a forge source is skipped at the auth probe (`… auth status --hostname … failed: …`) under a harness that sandboxes shell commands;
+     - the moderne reason is `mod study failed: exit 255, no error output`.
+
+     Say so and re-run this one command with the harness's sandbox bypass, if it has one, before concluding the token is bad or the source has no findings.
 
 3. **Moderne gate.** Applies only when the moderne source's reason starts with `no DependencyVulnerabilityCheck run` or `no Moderne LST`, which means `mod` is installed and the repo is JVM. By `deep_budget`:
    - `allow`: re-run the script with `--moderne-run`.
-   - `ask`: say what it costs (minutes, a JVM build, possibly Moderne credits) and ask.
+   - `ask`: say what it costs (forces a Moderne LST build and recipe run; minutes of JVM build) and ask.
    - `deny`: say the run is available on request.
    - An explicit "include Moderne" or "run the recipe" in the user's request beats `deny`.
 
@@ -45,15 +50,17 @@ Open vulnerability findings for the current repository from its forge and Modern
    - Every failure the script recorded appears under Skipped sources. A `partial` source is never rendered as if complete.
    - Render `sources[].name` as a compact set, e.g. `[gitlab,moderne]`.
    - `severity_origin == "policy"`: render the severity with a `(policy)` suffix.
-   - `fix_version` null with two or more `package.fix_candidates`: render `→ 1.2.4 | 1.3.0 (sources disagree)`.
+   - Members naming more than one distinct package (`sources[].package.name`): render one `<package@version → fix_version>` line per distinct package, taken from `sources[].package`.
+   - Candidates for the same package (`fix_candidates[].package`) that differ: render `→ 1.2.4 | 1.3.0 (sources disagree)`. Candidates for different packages never disagree.
    - Omit the package column for `code` and `secret` findings. Omit the location column for dependency findings with no manifest path. A GitHub secret finding has no location: say "location not in the alert".
    - A moderne entry in `sources` whose `as_of` is older than seven days: show that date next to the finding.
    - `findings` empty with at least one source `ok`: say so, and still list skipped sources.
 
 5. **Remediate.** One block per finding in critical and high; medium and low grouped by package when they share a fix version. Use the first route the data supports:
    - **Bump.** `fix_version` present: give the coordinate and version and the step from `version`. Compare dotted numeric segments of `version` and `fix_version` left to right; the first differing segment at index 0 is major, 1 minor, 2 or later patch. If either is not dotted numerics, say the step cannot be classified. If `mod` is installed, name `DependencyVulnerabilityCheck` with `-P maximumUpgradeDelta=<step>` as the one-command route; it edits Maven and Gradle manifests (direct dependencies by default, transitives with `-P overrideTransitive=true`). Naming it is advice; running it is the user's follow-up.
-   - **Recipe.** A code finding whose CWE maps to an `org.openrewrite.java.security.*` recipe in the table below. Name it only when all three hold: the location is a `.java` file, `mod` is installed, and `mod config recipes search <id> --json=id` returns that id. Anything unmapped, or any failed condition, falls through to the code-change route.
-   - **Code change.** Explain the vulnerability class in two sentences and point at `file:line`. Use the source's `solution` text when present.
+   - **Ask.** A dependency finding with no `fix_version` and no candidates, or with disagreeing candidates for the same package: name each candidate (or say none is known) and ask which to adopt, instead of falling through to the code-change route.
+   - **Recipe.** A code finding whose CWE (a `CWE-n` entry in its `identifiers`) maps to an `org.openrewrite.java.security.*` recipe in the table below. Name it only when all three hold: the location is a `.java` file, `mod` is installed, and `mod config recipes search <id> --json=id` returns that id. Anything unmapped, or any failed condition, falls through to the code-change route.
+   - **Code change.** Explain the vulnerability class in two sentences and point at `file:line`. Use the source's `solution` text when present. `container` and `unknown` findings use this route when they have a location, else the dismissal route's ask.
    - **Dismissal.** Never inferred.
      - `package.scope` of `development` or `test` is a triage signal that the dependency may not ship: raise it and ask the user to confirm before calling a dismissal appropriate.
      - Nothing in the data supports reachability or secret rotation: ask whether the condition holds.
