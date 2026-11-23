@@ -123,6 +123,92 @@ assert_eq "no remote is unknown" unknown "$(si_repo_json "$NOREMOTE" | jq -r .fo
 out=$("$BASH" "$SCRIPT" --repo "$NOREMOTE")
 assert_eq "no remote skips both forge sources" 2 "$(jq '[.sources[] | select(.reason=="no git remote")] | length' <<<"$out")"
 
+REPO_JSON=$(si_repo_json "$REPO")
+# raw_finding <source> <native_id> <kind> <severity_raw> <origin> <ids_csv> [fix_version] [depth] [scope]
+raw_finding() {
+    jq -nc --arg s "$1" --arg id "$2" --arg kind "$3" --arg sev "$4" --arg origin "$5" --arg ids "$6" \
+        --arg fix "${7:-}" --arg depth "${8:-}" --arg scope "${9:-}" '
+        def opt: if . == "" or . == "null" then null else . end;
+        {source: $s, native_id: $id, kind: $kind, severity_raw: ($sev | opt), severity_origin: $origin,
+         title: ("finding " + $id),
+         package: (if $kind == "dependency" or $kind == "container"
+                   then {name: "org.example:lib", version: "1.2.3", fix_version: ($fix | opt),
+                         depth: ($depth | opt), scope: ($scope | opt)}
+                   else null end),
+         identifiers: (if $ids == "" then [] else $ids | split(",") end),
+         locations: [{file: "pom.xml", line: null}],
+         url: ("https://example.com/" + $s + "/" + $id), solution: null, epss: null, as_of: null}'
+}
+# raw findings on stdin -> si_shape input, one ok result per source
+shape_input() {
+    jq -sc --argjson repo "$REPO_JSON" '{repo: $repo, results: (group_by(.source)
+        | map({source: {name: .[0].source, status: "ok", reason: null, count: 0}, findings: .}))}'
+}
+one_finding()   { raw_finding "$1" "$2" "$3" "$4" "$5" "" | shape_input; }
+dep_finding()   { raw_finding "$1" "$2" dependency high source "$3" | shape_input; }
+two_deps()      { { raw_finding "$1" 1 dependency high source "$2"; raw_finding "$3" 2 dependency high source "$4"; } | shape_input; }
+two_deps_fix()  { { raw_finding "$1" 1 dependency high source "$2" "$3"; raw_finding "$4" 2 dependency high source "$5" "$6"; } | shape_input; }
+two_deps_sev()  { { raw_finding "$1" 1 dependency "$2" source CVE-2024-1; raw_finding "$3" 2 dependency "$4" source CVE-2024-1; } | shape_input; }
+two_deps_pkg()  { { raw_finding "$1" 1 dependency high source "$2" "" "$3" "$4"; raw_finding "$5" 2 dependency high source "$6" "" "$7" "$8"; } | shape_input; }
+bridge_three()  { { raw_finding gitlab 1 dependency high source CVE-2024-1
+                    raw_finding github 2 dependency high source GHSA-AAAA,CVE-2024-1
+                    raw_finding moderne 3 dependency high source GHSA-AAAA; } | shape_input; }
+two_code_same_rule() { { raw_finding github 1 code high source js/sql-injection; raw_finding github 2 code high source js/sql-injection; } | shape_input; }
+dup_native_id() { { raw_finding github 7 dependency high source CVE-2024-1; raw_finding github 7 dependency high source CVE-2024-1; } | shape_input; }
+mixed_severities() { { raw_finding github 5 code "" source ""; raw_finding github 4 code low source ""
+                       raw_finding github 3 code medium source ""; raw_finding github 2 code high source ""
+                       raw_finding github 1 code critical source ""; } | shape_input; }
+ids_finding()   { raw_finding "$1" "$2" "$3" high source "$4,$5,$6" | shape_input; }
+one_container() { raw_finding "$1" "$2" container high source "$3" | shape_input; }
+two_containers() { { raw_finding "$1" 1 container high source "$2"; raw_finding "$3" 2 container high source "$4"; } | shape_input; }
+
+echo "si_shape"
+shape() { si_shape <<<"$1"; }
+# severity table
+for pair in "Critical:critical" "ERROR:high" "moderate:medium" "warning:medium" "INFO:low" "note:low" ":unknown" "weird:unknown"; do
+  raw="${pair%%:*}"; want="${pair##*:}"
+  got=$(shape "$(one_finding github 1 code "$raw" source)" | jq -r '.findings[0].severity')
+  assert_eq "severity $raw -> $want" "$want" "$got"
+done
+assert_eq "policy origin forces critical" critical "$(shape "$(one_finding github 2 secret 'n/a (secret)' policy)" | jq -r '.findings[0].severity')"
+# keys
+assert_eq "CVE key" "CVE-2024-1" "$(shape "$(dep_finding gitlab 9 CVE-2024-1)" | jq -r '.findings[0].key')"
+assert_eq "GHSA key when no CVE" "GHSA-AAAA" "$(shape "$(dep_finding github 3 GHSA-AAAA)" | jq -r '.findings[0].key')"
+assert_eq "mixed-case ids upper-cased and merged" 1 "$(shape "$(two_deps gitlab cve-2024-1 moderne CVE-2024-1)" | jq '.findings | length')"
+assert_eq "unidentified dependency key" "pkg:org.example:lib@1.2.3" "$(shape "$(dep_finding moderne 7 '')" | jq -r '.findings[0].key')"
+assert_eq "code key" "github:code:42" "$(shape "$(one_finding github 42 code high source)" | jq -r '.findings[0].key')"
+# merge rules
+m=$(shape "$(two_deps gitlab CVE-2024-1 moderne CVE-2024-1)")
+assert_eq "same CVE merges" 1 "$(jq '.findings|length' <<<"$m")"
+assert_eq "merged keeps both sources" 2 "$(jq '.findings[0].sources|length' <<<"$m")"
+assert_eq "merged count arithmetic" "$(jq '.findings|length' <<<"$m")" "$(jq '([.sources[].count]|add) - .summary.merged' <<<"$m")"
+assert_eq "transitive merge via GHSA+CVE bridge" 1 "$(shape "$(bridge_three)" | jq '.findings|length')"
+assert_eq "two unidentified same pkg@ver merge" 1 "$(shape "$(two_deps gitlab '' moderne '')" | jq '.findings|length')"
+assert_eq "unidentified never joins identified" 2 "$(shape "$(two_deps gitlab CVE-2024-1 moderne '')" | jq '.findings|length')"
+assert_eq "two CVEs same pkg stay two" 2 "$(shape "$(two_deps gitlab CVE-2024-1 moderne CVE-2024-2)" | jq '.findings|length')"
+assert_eq "code findings never merge" 2 "$(shape "$(two_code_same_rule)" | jq '.findings|length')"
+assert_eq "duplicate native id collapses" 1 "$(shape "$(dup_native_id)" | jq '.sources[0].count')"
+# fix candidates, severity, ordering
+f=$(shape "$(two_deps_fix gitlab CVE-1 1.2.4 moderne CVE-1 1.2.4)")
+assert_eq "agreeing candidates set fix_version" 1.2.4 "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
+f=$(shape "$(two_deps_fix gitlab CVE-1 1.2.4 moderne CVE-1 1.3.0)")
+assert_eq "disagreeing candidates null fix_version" null "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
+assert_eq "both candidates kept" 2 "$(jq '.findings[0].package.fix_candidates|length' <<<"$f")"
+assert_eq "highest severity wins" critical "$(shape "$(two_deps_sev gitlab low moderne critical)" | jq -r '.findings[0].severity')"
+o=$(shape "$(mixed_severities)")
+assert_eq "ordered by severity then key" "critical high medium low unknown" "$(jq -r '[.findings[].severity]|join(" ")' <<<"$o")"
+assert_eq "summary counts" '{"critical":1,"high":1,"medium":1,"low":1,"unknown":1,"merged":0}' "$(jq -c .summary <<<"$o")"
+assert_eq "package null for code" null "$(shape "$(one_finding github 42 code high source)" | jq -r '.findings[0].package')"
+# identifiers and containers
+i=$(shape "$(ids_finding github 5 code 'cve-2024-9' 'js/sql-injection' 'ghsa-zzzz')")
+assert_eq "only CVE/GHSA upper-cased" '["CVE-2024-9","js/sql-injection","GHSA-ZZZZ"]' "$(jq -c '.findings[0].identifiers' <<<"$i")"
+assert_eq "unidentified containers do not merge" 2 "$(shape "$(two_containers gitlab '' github '')" | jq '.findings|length')"
+assert_eq "unidentified container key" "gitlab:container:gid://gitlab/Vulnerability/8" "$(shape "$(one_container gitlab 'gid://gitlab/Vulnerability/8' '')" | jq -r '.findings[0].key')"
+assert_eq "containers merge on CVE" 1 "$(shape "$(two_containers gitlab CVE-2024-3 github CVE-2024-3)" | jq '.findings|length')"
+# merged package fields: gitlab member has depth null, scope null; moderne member has depth transitive, scope test
+p=$(shape "$(two_deps_pkg gitlab CVE-2024-1 null null moderne CVE-2024-1 transitive test)" | jq -c '.findings[0].package|{name,version,depth,scope}')
+assert_eq "merged package takes first-source name/version, first non-null depth/scope" '{"name":"org.example:lib","version":"1.2.3","depth":"transitive","scope":"test"}' "$p"
+
 echo
 printf 'Total: %d pass, %d fail\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]]

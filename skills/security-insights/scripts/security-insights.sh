@@ -109,6 +109,77 @@ si_skipped() {
         '{source: {name: $name, status: "skipped", reason: $reason, count: 0}, findings: []}'
 }
 
+SI_SHAPE_JQ='
+def sev_rank: {critical: 0, high: 1, medium: 2, low: 3, unknown: 4}[.];
+def source_rank: {gitlab: 0, github: 1, moderne: 2}[.] // 3;
+def norm_sev:
+  (. // "" | ascii_downcase) as $s
+  | if $s == "critical" then "critical"
+    elif $s | IN("high", "error") then "high"
+    elif $s | IN("medium", "moderate", "warning") then "medium"
+    elif $s | IN("low", "info", "note") then "low"
+    else "unknown" end;
+def ordered_unique: reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
+def normalise:
+  .identifiers |= map(if test("^(cve|ghsa)-"; "i") then ascii_upcase else . end)
+  | .adv = [.identifiers[] | select(startswith("CVE-") or startswith("GHSA-"))]
+  | .severity = (if .severity_origin == "policy" then "critical" else .severity_raw | norm_sev end);
+# Lists of finding indexes that must share a group: one per advisory id, and one per
+# package@version among dependency findings that carry no advisory id.
+def link_sets:
+  [to_entries[] | .key as $i | .value
+   | if (.kind | IN("dependency", "container")) and (.adv | length) > 0 then .adv[] | {k: ., i: $i}
+     elif .kind == "dependency" and .package != null then {k: "pkg:\(.package.name)@\(.package.version)", i: $i}
+     else empty end]
+  | group_by(.k) | map(map(.i));
+def components($n; $sets):
+  def step: reduce $sets[] as $s (.; ([.[$s[]]] | min) as $m | reduce $s[] as $i (.; .[$i] = $m));
+  def settle: step as $next | if $next == . then . else $next | settle end;
+  [range($n)] | settle;
+def merge:
+  sort_by([(.source | source_rank), .native_id])
+  | .[0] as $first
+  | ([.[].adv[]] | unique) as $adv
+  | (sort_by(.severity | sev_rank) | .[0]) as $worst
+  | [.[] | select(.package.fix_version != null) | {source, version: .package.fix_version}] as $fixes
+  | {key: (first($adv[] | select(startswith("CVE-")))
+           // first($adv[] | select(startswith("GHSA-")))
+           // (if $first.kind == "dependency" and $first.package != null
+               then "pkg:\($first.package.name)@\($first.package.version)"
+               else "\($first.source):\($first.kind):\($first.native_id)" end)),
+     severity: $worst.severity,
+     severity_origin: $worst.severity_origin,
+     title: $first.title,
+     kind: $first.kind,
+     package: (if $first.package == null then null else
+       {name: $first.package.name, version: $first.package.version,
+        fix_version: (if ($fixes | map(.version) | unique | length) == 1 then $fixes[0].version else null end),
+        fix_candidates: ($fixes | unique),
+        depth: (first(.[].package.depth // empty) // null),
+        scope: (first(.[].package.scope // empty) // null)} end),
+     identifiers: ([.[].identifiers[]] | ordered_unique),
+     locations: ([.[].locations[]] | ordered_unique),
+     sources: map({name: .source, id: .native_id, severity_raw, url, solution}
+                  + (if .epss != null then {epss} else {} end)
+                  + (if .as_of != null then {as_of} else {} end))};
+
+[.results[] | .findings |= unique_by([.source, .native_id])] as $results
+| [$results[].findings[] | normalise] as $raw
+| components($raw | length; $raw | link_sets) as $labels
+| ([range($raw | length)] | group_by($labels[.]) | map(map($raw[.]) | merge)
+   | sort_by([(.severity | sev_rank), .key])) as $findings
+| {repo: .repo,
+   sources: [$results[] | .source + {count: (.findings | length)}],
+   findings: $findings,
+   summary: (reduce $findings[] as $f ({critical: 0, high: 0, medium: 0, low: 0, unknown: 0};
+               .[$f.severity] += 1)
+             + {merged: (($raw | length) - ($findings | length))})}
+'
+
+si_shape() {
+    jq -c "$SI_SHAPE_JQ"
+}
+
 si_collect() {
     local dir="$1" repo forge host reason results=""
     repo=$(si_repo_json "$dir")
@@ -119,11 +190,7 @@ si_collect() {
         results="$(si_skipped gitlab "$reason")
 $(si_skipped github "$reason")"
     fi
-    jq -n --argjson repo "$repo" --slurpfile results <(printf '%s\n' "$results") '
-        {repo: $repo,
-         sources: [$results[] | .source],
-         findings: [$results[] | .findings[]],
-         summary: {critical: 0, high: 0, medium: 0, low: 0, unknown: 0, merged: 0}}'
+    printf '%s\n' "$results" | jq -sc --argjson repo "$repo" '{repo: $repo, results: .}' | si_shape
 }
 
 if [[ -z "${SECURITY_INSIGHTS_LIB:-}" ]]; then si_main "$@"; fi
