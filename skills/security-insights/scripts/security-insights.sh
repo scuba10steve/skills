@@ -230,12 +230,15 @@ def secret_scanning:
 '
 
 si_source_github() {
-    local host="$1" path="$2" endpoint filter err reads="[]" findings="[]" reasons="" ok=0 total=0
+    local host="$1" path="$2" endpoint filter err reads="[]" reasons="" ok=0 total=0 work acc
     command -v gh >/dev/null 2>&1 || { si_skipped github "gh not installed"; return 0; }
     err=$(gh auth status --hostname "$host" 2>&1 >/dev/null) || {
         si_skipped github "gh auth status --hostname $host failed: $(printf '%s\n' "$err" | head -n 1)"
         return 0
     }
+    work=$(mktemp -d "${TMPDIR:-/tmp}/si-gh.XXXXXX")
+    acc="$work/acc.json"
+    printf '[]' > "$acc"
     for endpoint in dependabot code-scanning secret-scanning; do
         filter="${endpoint//-/_}"
         total=$((total+1))
@@ -246,15 +249,18 @@ si_source_github() {
         else
             ok=$((ok+1))
             reads=$(jq -c --arg n "$endpoint" '. + [{name: $n, status: "ok"}]' <<<"$reads")
-            findings=$(jq -c --argjson new "$SI_READ_JSON" "$SI_GH_MAP"' . + [$new[] | '"$filter"']' <<<"$findings")
+            jq -c "$SI_GH_MAP"'[.[] | '"$filter"']' <<<"$SI_READ_JSON" > "$work/new.json"
+            jq -sc 'add' "$acc" "$work/new.json" > "$work/next.json"
+            mv "$work/next.json" "$acc"
         fi
     done
-    jq -nc --argjson reads "$reads" --argjson findings "$findings" --arg reasons "$reasons" --argjson ok "$ok" --argjson total "$total" '
+    jq -nc --argjson reads "$reads" --slurpfile findings "$acc" --arg reasons "$reasons" --argjson ok "$ok" --argjson total "$total" '
         {source: {name: "github",
                   status: (if $ok == $total then "ok" elif $ok > 0 then "partial" else "skipped" end),
                   reason: (if $ok == 0 then $reasons else null end),
                   count: 0, reads: $reads},
-         findings: $findings}'
+         findings: $findings[0]}'
+    rm -rf "$work"
 }
 
 si_collect() {

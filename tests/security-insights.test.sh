@@ -265,6 +265,16 @@ assert_eq "failed read named" 'HTTP 403: Code scanning is not enabled for this r
 printf '[]' > "$GHFIX/dependabot.json"; : > "$GHFIX/code-scanning.rc"
 r=$(si_source_github github.com o/r)
 assert_eq "empty array read is ok" ok "$(jq -r '.source.reads[]|select(.name=="dependabot").status' <<<"$r")"
+cp "$GHFIX/dependabot.json" "$GHFIX/dependabot.small"
+jq -n '[range(300) | {number: ., html_url: "https://github.com/o/r/security/dependabot/\(.)",
+    security_advisory: {severity: "high", summary: "advisory \(.)", cve_id: "CVE-2024-\(.)", ghsa_id: "GHSA-\(.)",
+                        description: ("x" * 4000)},
+    dependency: {package: {name: "org.example:lib\(.)"}, manifest_path: "pom.xml", scope: "runtime"},
+    security_vulnerability: {vulnerable_version_range: "= 1.0.0", first_patched_version: {identifier: "1.0.1"}}}]' > "$GHFIX/dependabot.json"
+r=$(si_source_github github.com o/r 2>&1)
+assert_eq "300 alerts -> ok" ok "$(jq -r .source.status <<<"$r" 2>/dev/null)"
+assert_eq "300 alerts -> 300 dependabot findings" 300 "$(jq '[.findings[]|select(.kind=="dependency")]|length' <<<"$r" 2>/dev/null)"
+cp "$GHFIX/dependabot.small" "$GHFIX/dependabot.json"; printf '[]' > "$GHFIX/dependabot.json"
 out=$(SECURITY_INSIGHTS_LIB= KNOWN_GH=github.com "$BASH" "$SCRIPT" --repo "$REPO")
 assert_eq "collect includes github source" 1 "$(jq '[.sources[]|select(.name=="github" and .status=="ok")]|length' <<<"$out")"
 for e in dependabot code-scanning secret-scanning; do echo 1 > "$GHFIX/$e.rc"; done
