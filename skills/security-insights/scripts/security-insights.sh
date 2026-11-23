@@ -11,7 +11,7 @@ Emits one JSON document: security findings for a repository, collected
 from the forge, dependency tooling and Moderne.
 
   --repo <path>   Repository to inspect (default: current directory)
-  --moderne-run   Forces a Moderne LST build and recipe run; minutes of JVM build
+  --moderne-run   Forces a Moderne LST build and one DependencyVulnerabilityCheck run per detected ecosystem; minutes
   -h, --help      This help
 USAGE
 }
@@ -119,7 +119,8 @@ si_result() {
                   + if $r == [] then {} else
                       ([$r[] | select(.status == "ok")] | length) as $ok
                       | {status: (if $ok == ($r | length) then "ok" elif $ok > 0 then "partial" else "skipped" end),
-                         reason: (if $ok == 0 then [$r[] | "\(.name): \(.reason)"] | join("; ") else null end),
+                         reason: (if $ok > 0 then null elif ($r | length) == 1 then $r[0].reason
+                                  else [$r[] | "\(.name): \(.reason)"] | join("; ") end),
                          reads: $r} end),
          findings: ($f | add // [])}'
 }
@@ -152,6 +153,12 @@ si_map() {
     [[ "$rc" -ne 0 ]] || return 0
     SI_READ_REASON="$label output not understood: $(si_first_err "$rc" <<<"$err")"
     return 1
+}
+
+# si_read <name> -> one reads[] entry, skipped with SI_READ_REASON when it is set
+si_read() {
+    jq -nc --arg n "$1" --arg r "$SI_READ_REASON" \
+        '{name: $n} + if $r == "" then {status: "ok"} else {status: "skipped", reason: $r} end'
 }
 
 SI_SHAPE_JQ='
@@ -223,10 +230,11 @@ def merge:
      sources: map({name: .source, id: .native_id, severity_raw, url, solution,
                    package: (if .package == null then null else .package | {name, version, fix_version} end)}
                   + (if .epss != null then {epss} else {} end)
-                  + (if .as_of != null then {as_of} else {} end))};
+                  + (if .as_of != null then {as_of} else {} end)
+                  + (if .ecosystem != null then {ecosystem} else {} end))};
 
 [.results[] | if well_formed then . else malformed end
- | .findings |= unique_by([.source, .native_id])] as $results
+ | .findings |= unique_by([.source, .ecosystem, .native_id])] as $results
 | [$results[].findings[] | normalise] as $raw
 | components($raw | length; $raw | link_sets) as $labels
 | ([range($raw | length)] | group_by($labels[.]) | map(map($raw[.]) | merge)
@@ -295,8 +303,7 @@ si_source_github() {
         if si_gh_read "$host" "$path" "$endpoint/alerts" "$work/read.json"; then
             si_map github "$work/findings.json" -s "$SI_GH_MAP"'[.[] | '"${endpoint//-/_}"']' "$work/read.json" || :
         fi
-        jq -nc --arg n "$endpoint" --arg r "$SI_READ_REASON" \
-            '{name: $n} + if $r == "" then {status: "ok"} else {status: "skipped", reason: $r} end' >> "$work/reads.json"
+        si_read "$endpoint" >> "$work/reads.json"
     done
     si_result github "" "" "$work/findings.json" "$work/reads.json"
 }
@@ -381,12 +388,53 @@ si_source_gitlab() {
     si_result gitlab "$status" "$reason" "$work/findings.json"
 }
 
-SI_MOD_RECIPE=org.openrewrite.java.dependencies.DependencyVulnerabilityCheck
-SI_MOD_TABLE=org.openrewrite.java.dependencies.table.VulnerabilityReport
+si_mod_markers() {
+    case "$1" in
+        java)   echo "pom.xml build.gradle build.gradle.kts settings.gradle settings.gradle.kts" ;;
+        nodejs) echo "package.json" ;;
+        python) echo "pyproject.toml requirements.txt setup.py" ;;
+        golang) echo "go.mod" ;;
+        csharp) echo "*.csproj *.sln packages.config" ;;
+    esac
+}
+
+si_mod_recipe() {
+    case "$1" in
+        java)   echo org.openrewrite.java.dependencies.DependencyVulnerabilityCheck ;;
+        nodejs) echo org.openrewrite.nodejs.security.DependencyVulnerabilityCheck ;;
+        python) echo org.openrewrite.python.dependencies.DependencyVulnerabilityCheck ;;
+        golang) echo org.openrewrite.golang.dependencies.DependencyVulnerabilityCheck ;;
+        csharp) echo org.openrewrite.csharp.dependencies.DependencyVulnerabilityCheck ;;
+    esac
+}
+
+si_mod_table() {
+    case "$1" in
+        java)   echo org.openrewrite.java.dependencies.table.VulnerabilityReport ;;
+        nodejs) echo org.openrewrite.nodejs.table.VulnerabilityReport ;;
+        python) echo org.openrewrite.python.dependencies.table.VulnerabilityReport ;;
+        golang) echo org.openrewrite.golang.dependencies.table.VulnerabilityReport ;;
+        csharp) echo org.openrewrite.csharp.dependencies.table.VulnerabilityReport ;;
+    esac
+}
+
+# si_mod_ecosystems <dir> -> ecosystems whose manifest markers sit at the root of dir, one per line
+si_mod_ecosystems() {
+    local dir="$1" eco pat f
+    local -a pats
+    for eco in java nodejs python golang csharp; do
+        read -r -a pats <<<"$(si_mod_markers "$eco")"
+        for pat in "${pats[@]}"; do
+            for f in "$dir"/$pat; do
+                if [[ -f "$f" ]]; then echo "$eco"; continue 3; fi
+            done
+        done
+    done
+}
 
 SI_MOD_MAP='
 def opt: if . == null or . == "" then null else . end;
-def cwes: (.CWEs // "" | tostring) | [splits("[,;]")] | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))
+def cwes: (.CWEs // .cwes // "" | tostring) | [splits("[,;]")] | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))
           | map(if test("^[0-9]+$") then "cwe-" + . else . end);
 def depth_label: opt | if . == null then null elif type == "number" then (if . == 0 then "direct" else "transitive" end)
                        else ascii_downcase end;
@@ -396,12 +444,15 @@ if type != "array" then error("not an array") else
  | {source: "moderne", native_id: "VulnerabilityReport:row:\($i)", kind: "dependency",
     severity_raw: .severity, severity_origin: "source",
     title: ((.summary | opt) // .cve),
-    package: {name: "\(.groupId):\(.artifactId)", version: (.version | opt),
-              fix_version: (.fixedVersion | opt), depth: (.depth | depth_label), scope: $scope},
+    package: {name: (if .groupId != null then "\(.groupId):\(.artifactId)" else .packageName end),
+              version: (.version | opt), fix_version: (.fixedVersion | opt),
+              depth: ((.depth | depth_label)
+                      // (.direct | if . == true then "direct" elif . == false then "transitive" else null end)),
+              scope: $scope},
     identifiers: ([.cve | opt] | map(select(. != null))) + cwes,
     locations: [], url: null, solution: null,
     epss: (.epss | if type == "number" then . elif type == "string" then (tonumber? // null) else null end),
-    as_of: $as_of}] end
+    as_of: $as_of, ecosystem: $eco}] end
 '
 
 # si_mod_as_of <run id> -> local ISO-8601 time from the YYYYMMDDHHMMSS run id prefix
@@ -434,13 +485,11 @@ si_mod_step() {
 }
 
 si_source_moderne() {
-    local dir="$1" moderne_run="$2" f jvm=0 work entry run_id scope err rc=0
+    local dir="$1" moderne_run="$2" ecos eco recipe work entry run_id scope err rc
     command -v mod >/dev/null 2>&1 || { si_skipped moderne "mod not installed"; return 0; }
-    for f in pom.xml build.gradle build.gradle.kts settings.gradle settings.gradle.kts; do
-        if [[ -f "$dir/$f" ]]; then jvm=1; fi
-    done
-    if [[ "$jvm" -eq 0 ]]; then
-        si_skipped moderne "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only"
+    ecos=$(si_mod_ecosystems "$dir")
+    if [[ -z "$ecos" ]]; then
+        si_skipped moderne "no supported dependency manifest; DependencyVulnerabilityCheck covers Maven/Gradle, npm, Python, Go and NuGet"
         return 0
     fi
     if [[ "$moderne_run" == 1 ]]; then si_mod_step build "$dir" || return 0; fi
@@ -449,34 +498,42 @@ si_source_moderne() {
         si_skipped moderne "no Moderne LST for this repository; run: mod build ."
         return 0
     fi
-    if [[ "$moderne_run" == 1 ]]; then si_mod_step run "$dir" --recipe "$SI_MOD_RECIPE" || return 0; fi
+    if [[ "$moderne_run" == 1 ]]; then
+        for eco in $ecos; do si_mod_step run "$dir" --recipe "$(si_mod_recipe "$eco")" || return 0; done
+    fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/si-mod.XXXXXX")
     trap 'rm -rf "$work"; trap - RETURN' RETURN
     if ! mod run-history --json --most-recent "$dir" >"$work/history.json" 2>/dev/null \
-        || ! entry=$(jq -rs --arg r "$SI_MOD_RECIPE" '
-            .[0] | if type != "object" then error("not an object") else
-              [to_entries[] | select(.value.recipeId == $r)] | sort_by(.key) | last
-              | if . == null then empty else "\(.key)\t\(.value.recipeOptions.scope // null | tojson)" end end
-            ' "$work/history.json" 2>/dev/null); then
+        || ! jq -e 'type == "object"' "$work/history.json" >/dev/null 2>&1; then
         si_skipped moderne "run-history output not understood"
         return 0
     fi
-    if [[ -z "$entry" ]]; then
-        si_skipped moderne "no DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe $SI_MOD_RECIPE"
-        return 0
-    fi
-    run_id="${entry%%$'\t'*}" scope="${entry#*$'\t'}"
-    err=$(mod study "$dir" "--recipe-run=$run_id" --data-table "$SI_MOD_TABLE" --json 2>&1 >"$work/study.json") || rc=$?
-    if [[ "$rc" -ne 0 ]]; then
-        si_skipped moderne "mod study failed: $(si_first_err "$rc" <<<"$err")"
-        return 0
-    fi
-    if ! si_map moderne "$work/findings.json" --arg path "$SI_MOD_PATH" --arg origin "$SI_MOD_ORIGIN" \
-        --arg as_of "$(si_mod_as_of "$run_id")" --argjson scope "$scope" "$SI_MOD_MAP" "$work/study.json"; then
-        si_skipped moderne "$SI_READ_REASON"
-        return 0
-    fi
-    si_result moderne ok "" "$work/findings.json"
+    : > "$work/findings.json"
+    for eco in $ecos; do
+        recipe=$(si_mod_recipe "$eco") rc=0 SI_READ_REASON=""
+        if ! entry=$(jq -r --arg r "$recipe" '
+                [to_entries[] | select(.value.recipeId == $r)] | sort_by(.key) | last
+                | if . == null then empty else "\(.key)\t\(.value.recipeOptions.scope // null | tojson)" end
+                ' "$work/history.json" 2>/dev/null); then
+            si_skipped moderne "run-history output not understood"
+            return 0
+        fi
+        if [[ -z "$entry" ]]; then
+            SI_READ_REASON="no $eco DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe $recipe"
+        else
+            run_id="${entry%%$'\t'*}" scope="${entry#*$'\t'}"
+            err=$(mod study "$dir" "--recipe-run=$run_id" --data-table "$(si_mod_table "$eco")" --json 2>&1 >"$work/study.json") || rc=$?
+            if [[ "$rc" -ne 0 ]]; then
+                SI_READ_REASON="mod study failed: $(si_first_err "$rc" <<<"$err")"
+            else
+                si_map moderne "$work/findings.json" --arg path "$SI_MOD_PATH" --arg origin "$SI_MOD_ORIGIN" \
+                    --arg as_of "$(si_mod_as_of "$run_id")" --argjson scope "$scope" --arg eco "$eco" \
+                    "$SI_MOD_MAP" "$work/study.json" || :
+            fi
+        fi
+        si_read "$eco" >> "$work/reads.json"
+    done
+    si_result moderne "" "" "$work/findings.json" "$work/reads.json"
 }
 
 si_collect() {

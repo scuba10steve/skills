@@ -43,6 +43,12 @@ JVMREPO="$TMPHOME/jvm";     mkrepo "$JVMREPO"
 git -C "$JVMREPO" remote add origin https://github.com/o/jvm.git
 GRADLEREPO="$TMPHOME/gradle"; mkrepo "$GRADLEREPO"
 : > "$GRADLEREPO/settings.gradle.kts"
+NODEREPO="$TMPHOME/node";   mkrepo "$NODEREPO";  : > "$NODEREPO/package.json"
+PYREPO="$TMPHOME/py";       mkrepo "$PYREPO";    : > "$PYREPO/requirements.txt"
+GOREPO="$TMPHOME/go";       mkrepo "$GOREPO";    : > "$GOREPO/go.mod"
+CSREPO="$TMPHOME/cs";       mkrepo "$CSREPO";    : > "$CSREPO/App.csproj"
+CSSUBREPO="$TMPHOME/cssub"; mkrepo "$CSSUBREPO"; mkdir "$CSSUBREPO/sub" "$CSSUBREPO/Dir.csproj"; : > "$CSSUBREPO/sub/Other.csproj"
+MIXREPO="$TMPHOME/mix";     mkrepo "$MIXREPO";   : > "$MIXREPO/build.gradle"; : > "$MIXREPO/package.json"
 
 GHFIX="$TMPHOME/ghfix"; mkdir "$GHFIX"; export GHFIX
 cat > "$GHFIX/dependabot.json" <<'JSON'
@@ -111,6 +117,18 @@ cat > "$MODFIX/history_noscope.json" <<'JSON'
 {"20261120140200-abcde":{"recipeId":"org.openrewrite.java.dependencies.DependencyVulnerabilityCheck","recipeOptions":{},
   "dataTablesProduced":["org.openrewrite.java.dependencies.table.VulnerabilityReport"]}}
 JSON
+cat > "$MODFIX/history_nodejs.json" <<'JSON'
+{"20261121100000-nodej":{"recipeId":"org.openrewrite.nodejs.security.DependencyVulnerabilityCheck","recipeOptions":{},
+  "dataTablesProduced":["org.openrewrite.nodejs.table.VulnerabilityReport"]}}
+JSON
+cat > "$MODFIX/history_java_and_nodejs.json" <<'JSON'
+{"20261101080000-older":{"recipeId":"org.openrewrite.nodejs.security.DependencyVulnerabilityCheck","recipeOptions":{},
+  "dataTablesProduced":["org.openrewrite.nodejs.table.VulnerabilityReport"]},
+ "20261120140200-abcde":{"recipeId":"org.openrewrite.java.dependencies.DependencyVulnerabilityCheck","recipeOptions":{"scope":"test"},
+  "dataTablesProduced":["org.openrewrite.java.dependencies.table.VulnerabilityReport"]},
+ "20261121100000-nodej":{"recipeId":"org.openrewrite.nodejs.security.DependencyVulnerabilityCheck","recipeOptions":{},
+  "dataTablesProduced":["org.openrewrite.nodejs.table.VulnerabilityReport"]}}
+JSON
 printf 'not json' > "$MODFIX/history_bad.txt"
 printf '[]' > "$MODFIX/list_empty.json"
 cat > "$MODFIX/study_good.json" <<'JSON'
@@ -119,6 +137,9 @@ cat > "$MODFIX/study_good.json" <<'JSON'
 {"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"","groupId":"org.example","artifactId":"other","version":"2.0.0","fixedVersion":"","lastAffectedVersion":"2.0.0","versionWithinDelta":"","summary":"Other is vulnerable","severity":"MODERATE","depth":0,"CWEs":"","epss":null},
 {"repositoryOrigin":"github.com","repositoryPath":"o/elsewhere","repositoryBranch":"main","projectName":"x","cve":"CVE-2024-9","groupId":"org.example","artifactId":"far","version":"9.0.0","fixedVersion":"9.0.1","lastAffectedVersion":"9.0.0","versionWithinDelta":"","summary":"Far","severity":"HIGH","depth":"Direct","CWEs":"","epss":0.1}
 ]
+JSON
+cat > "$MODFIX/study_nodejs.json" <<'JSON'
+[{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"web","cve":"CVE-2024-7","packageName":"lodash","version":"4.17.20","fixedVersion":"4.17.21","summary":"Prototype pollution in lodash","severity":"HIGH","direct":false,"cwes":"CWE-1321"}]
 JSON
 cat > "$MODFIX/study_bad_row.json" <<'JSON'
 [{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","cve":"CVE-2024-1","groupId":"org.example","artifactId":"lib","version":"1.2.3","fixedVersion":"1.2.4","severity":"HIGH","depth":0},
@@ -189,7 +210,11 @@ echo "mod $*" >> "$ARGV_LOG"
 case "$1" in
     list) cat "$MODFIX/live-list.json" ;;
     run-history) cat "$MODFIX/live-history.json" ;;
-    study) if [[ -f "$MODFIX/study.rc" ]]; then exit 1; fi; cat "$MODFIX/live-study.json" ;;
+    study) if [[ -f "$MODFIX/study.rc" ]]; then exit 1; fi
+           case "$*" in
+               *"--data-table org.openrewrite.nodejs.table.VulnerabilityReport"*) cat "$MODFIX/study_nodejs.json" ;;
+               *) cat "$MODFIX/live-study.json" ;;
+           esac ;;
     build|run) if [[ -f "$MODFIX/$1.rc" ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi
                if [[ "$1" == build && -f "$MODFIX/build.writes" ]]; then cp "$MODFIX/list_good.json" "$MODFIX/live-list.json"; fi ;;
 esac
@@ -360,6 +385,10 @@ rc=0; n=$(one_finding github 1 code high source | jq -c '.results[0].findings = 
 assert_eq "null findings still shapes" "0 0" "$rc $(jq '.findings|length' <<<"$n")"
 rc=0; n=$(dep_finding github 1 CVE-2024-1 | jq -c '.results[0].findings[0].identifiers = [null, "CVE-2024-1"] | .results[0].findings[0].locations = null' | si_shape) || rc=$?
 assert_eq "null identifier and locations still shape" '0 ["CVE-2024-1"] []' "$rc $(jq -c '.findings[0].identifiers' <<<"$n") $(jq -c '.findings[0].locations' <<<"$n")"
+e=$({ raw_finding moderne 1 dependency high source CVE-2024-8 | jq -c '.ecosystem = "nodejs"'
+      raw_finding github 2 dependency high source CVE-2024-8; } | shape_input | si_shape)
+assert_eq "moderne ecosystem lands on its source entry" nodejs "$(jq -r '.findings[0].sources[]|select(.name=="moderne").ecosystem' <<<"$e")"
+assert_eq "github source entry has no ecosystem" false "$(jq '.findings[0].sources[]|select(.name=="github")|has("ecosystem")' <<<"$e")"
 r=$(one_finding moderne 1 code high source | jq -c '.results[0].findings = null' | si_shape)
 assert_eq "malformed source result replaced" "skipped moderne result malformed" "$(jq -r '.sources[]|select(.name=="moderne")|"\(.status) \(.reason)"' <<<"$r")"
 r=$(one_finding moderne 1 code high source | jq -c '.results[0].source = null' | si_shape)
@@ -466,13 +495,20 @@ assert_eq "glab absent -> skipped" "glab not installed" "$(PATH="$NOGLAB" si_sou
 assert_eq "glab unauthenticated -> skipped" "glab auth status --hostname gitlab.example.com failed: not logged in" "$(KNOWN_GL= si_source_gitlab gitlab.example.com g/r | reason_of)"
 
 echo "si_source_moderne"
-assert_eq "not a JVM project" "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only" "$(si_source_moderne "$REPO" 0 | reason_of)"
+assert_eq "no manifest" "no supported dependency manifest; DependencyVulnerabilityCheck covers Maven/Gradle, npm, Python, Go and NuGet" "$(si_source_moderne "$REPO" 0 | reason_of)"
+assert_eq "java detected" java "$(si_mod_ecosystems "$JVMREPO")"
+assert_eq "gradle settings detected" java "$(si_mod_ecosystems "$GRADLEREPO")"
+assert_eq "nodejs detected" nodejs "$(si_mod_ecosystems "$NODEREPO")"
+assert_eq "python detected" python "$(si_mod_ecosystems "$PYREPO")"
+assert_eq "golang detected" golang "$(si_mod_ecosystems "$GOREPO")"
+assert_eq "csharp detected by csproj glob" csharp "$(si_mod_ecosystems "$CSREPO")"
+assert_eq "csproj in subdir or as a directory is not detected" "" "$(si_mod_ecosystems "$CSSUBREPO")"
+assert_eq "two ecosystems in order" $'java\nnodejs' "$(si_mod_ecosystems "$MIXREPO")"
 assert_eq "mod absent" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$JVMREPO" 0 | reason_of)"
 assert_eq "mod probed before JVM check" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$REPO" 0 | reason_of)"
 mod_use list=list_empty.json
 assert_eq "no LST" "no Moderne LST for this repository; run: mod build ." "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
-mod_use list=list_good.json history=history_other_recipe.json
-assert_eq "no DVC run" "no DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck" "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
+assert_eq "no java run names the ecosystem" "no java DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck" "$(mod_use list=list_good.json history=history_other_recipe.json; si_source_moderne "$JVMREPO" 0 | reason_of)"
 mod_use history=history_bad.txt
 assert_eq "unparseable history" "run-history output not understood" "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
 mod_use history=history_good.json
@@ -525,6 +561,36 @@ r=$(si_source_moderne "$JVMREPO" 1 2>/dev/null)
 assert_eq "--moderne-run recovers from no LST" ok "$(jq -r .source.status <<<"$r")"
 assert_eq "no-LST recovery builds once then runs" "mod build|mod run" "$(mod_steps)"
 rm -f "$MODFIX/build.writes"; mod_use list=list_good.json
+mod_use history=history_nodejs.json study=study_nodejs.json
+: > "$ARGV_LOG"; r=$(si_source_moderne "$NODEREPO" 0)
+assert_eq "nodejs read ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "nodejs recipe used in study" 1 "$(grep -c -- "--data-table org.openrewrite.nodejs.table.VulnerabilityReport" "$ARGV_LOG")"
+assert_eq "packageName mapped" lodash "$(jq -r '.findings[0].package.name' <<<"$r")"
+assert_eq "direct:false maps to transitive" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
+assert_eq "lower-case cwes split" '["CVE-2024-7","CWE-1321"]' "$(jq -c '.findings[0].identifiers' <<<"$r")"
+assert_eq "ecosystem on finding" nodejs "$(jq -r '.findings[0].ecosystem' <<<"$r")"
+assert_eq "nodejs read named by ecosystem" '[{"name":"nodejs","status":"ok"}]' "$(jq -c .source.reads <<<"$r")"
+mod_use history=history_java_and_nodejs.json study=study_good.json
+: > "$ARGV_LOG"; r=$(si_source_moderne "$MIXREPO" 0)
+assert_eq "two reads" 2 "$(jq '.source.reads|length' <<<"$r")"
+assert_eq "both ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "findings from both tables" 3 "$(jq '.findings|length' <<<"$r")"
+assert_eq "run-history read once" 1 "$(grep -c '^mod run-history' "$ARGV_LOG")"
+assert_contains "latest run per recipe" "--recipe-run=20261121100000-nodej --data-table org.openrewrite.nodejs.table.VulnerabilityReport" "$(argv)"
+assert_eq "java rows tagged java" '["java","java","nodejs"]' "$(jq -c '[.findings[].ecosystem]' <<<"$r")"
+assert_eq "rows from two tables survive shaping" 3 "$(shape_result <<<"$r" | jq '.findings|length')"
+mod_use history=history_good.json
+r=$(si_source_moderne "$MIXREPO" 0)
+assert_eq "one missing run -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "missing read named" "no nodejs DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.nodejs.security.DependencyVulnerabilityCheck" "$(jq -r '.source.reads[]|select(.name=="nodejs").reason' <<<"$r")"
+assert_eq "partial keeps the read ecosystem's findings" 2 "$(jq '.findings|length' <<<"$r")"
+mod_use history=history_other_recipe.json
+assert_eq "no run in any ecosystem names each" "java: no java DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck; nodejs: no nodejs DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.nodejs.security.DependencyVulnerabilityCheck" "$(si_source_moderne "$MIXREPO" 0 | reason_of)"
+mod_use history=history_good.json
+: > "$ARGV_LOG"; si_source_moderne "$MIXREPO" 1 >/dev/null
+assert_eq "one build then two runs" "mod build|mod run|mod run" "$(mod_steps)"
+assert_eq "runs name both recipes" 2 "$(grep -c -E -- '--recipe org.openrewrite.(java.dependencies|nodejs.security).DependencyVulnerabilityCheck' "$ARGV_LOG")"
+assert_eq "runs in detection order" "java nodejs" "$(grep -oE -- '^mod run .* --recipe org.openrewrite.(java|nodejs)' "$ARGV_LOG" | sed -E 's/.*org.openrewrite.//' | paste -sd' ' -)"
 out=$(SECURITY_INSIGHTS_LIB= "$BASH" "$SCRIPT" --repo "$JVMREPO" 2>/dev/null)
 assert_eq "collect includes moderne source" 1 "$(jq '[.sources[]|select(.name=="moderne" and .status=="ok")]|length' <<<"$out")"
 
