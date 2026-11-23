@@ -393,6 +393,7 @@ assert_eq "glab unauthenticated -> skipped" "glab auth status --hostname gitlab.
 echo "si_source_moderne"
 assert_eq "not a JVM project" "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only" "$(si_source_moderne "$REPO" 0 | jq -r .source.reason)"
 assert_eq "mod absent" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
+assert_eq "mod probed before JVM check" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$REPO" 0 | jq -r .source.reason)"
 printf '[]' > "$MODFIX/list.json"
 assert_eq "no LST" "no Moderne LST for this repository; run: mod build ." "$(si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
 cp "$MODFIX/list_good.json" "$MODFIX/list.json"; cp "$MODFIX/history_other_recipe.json" "$MODFIX/history.json"

@@ -391,11 +391,11 @@ si_mod_as_of() {
 
 si_source_moderne() {
     local dir="$1" moderne_run="$2" work rc=0 listing history entry run_id scope origin path as_of
+    command -v mod >/dev/null 2>&1 || { si_skipped moderne "mod not installed"; return 0; }
     if [[ ! -f "$dir/pom.xml" && ! -f "$dir/build.gradle" && ! -f "$dir/build.gradle.kts" ]]; then
         si_skipped moderne "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only"
         return 0
     fi
-    command -v mod >/dev/null 2>&1 || { si_skipped moderne "mod not installed"; return 0; }
     work=$(mktemp -d "${TMPDIR:-/tmp}/si-mod.XXXXXX")
     listing=$(mod list --json "$dir" 2>/dev/null) || rc=$?
     origin=$(jq -r '.[0].origin // empty' <<<"$listing" 2>/dev/null) || origin=""
