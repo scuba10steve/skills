@@ -25,15 +25,16 @@ Open vulnerability findings for the current repository from its forge and Modern
    - The harness sandbox likely blocked the CLI when any of these holds:
      - a forge skip reason contains `x509` or `failed to verify certificate`;
      - a forge source is skipped at the auth probe (`… auth status --hostname … failed: …`) under a harness that sandboxes shell commands;
-     - the moderne reason is `mod study failed: exit 255, no error output`.
+     - a moderne reason is `mod study failed: exit 255, no error output`.
 
      Say so and re-run this one command with the harness's sandbox bypass, if it has one, before concluding the token is bad or the source has no findings.
 
-3. **Moderne gate.** Applies only when the moderne source's reason starts with `no DependencyVulnerabilityCheck run` or `no Moderne LST`, which means `mod` is installed and the repo is JVM. By `deep_budget`:
-   - `allow`: re-run the script with `--moderne-run`.
-   - `ask`: say what it costs (forces a Moderne LST build and recipe run; minutes of JVM build) and ask.
+3. **Moderne gate.** Applies when the moderne source, or any ecosystem read within it, is skipped for want of a run or an LST (a reason containing `no <ecosystem> DependencyVulnerabilityCheck run` or starting `no Moderne LST`), `mod` is installed, and at least one ecosystem was detected. It does not apply to `mod not installed` or `no supported dependency manifest`. By `deep_budget`:
+   - `allow`: re-run the script with `--moderne-run` once; never a second time in the same session, whatever the result.
+   - `ask`: say what it costs (one Moderne LST build plus one recipe run per detected ecosystem; minutes) and ask.
    - `deny`: say the run is available on request.
    - An explicit "include Moderne" or "run the recipe" in the user's request beats `deny`.
+   - Offer the run only on repositories the user's Moderne license covers; public repositories need no license.
 
 4. **Render** in the script's order:
 
@@ -44,10 +45,11 @@ Open vulnerability findings for the current repository from its forge and Modern
    ## Skipped sources
    <name>: <reason>                       status=skipped
    <name>/<read>: <reason>                each failed read of a status=partial source
+   moderne/<ecosystem>: <reason>          each skipped ecosystem of the moderne source
    <name>: partial, <reason>              a paginated source that stopped early
    ```
 
-   - Every failure the script recorded appears under Skipped sources. A `partial` source is never rendered as if complete.
+   - Every failure the script recorded appears under Skipped sources. A `partial` source, moderne included, is never rendered as if complete.
    - Render `sources[].name` as a compact set, e.g. `[gitlab,moderne]`.
    - `severity_origin == "policy"`: render the severity with a `(policy)` suffix.
    - Members naming more than one distinct package (`sources[].package.name`): render one `<package@version → fix_version>` line per distinct package, taken from `sources[].package`.
@@ -57,7 +59,9 @@ Open vulnerability findings for the current repository from its forge and Modern
    - `findings` empty with at least one source `ok`: say so, and still list skipped sources.
 
 5. **Remediate.** One block per finding in critical and high; medium and low grouped by package when they share a fix version. Use the first route the data supports:
-   - **Bump.** `fix_version` present: give the coordinate and version and the step from `version`. Compare dotted numeric segments of `version` and `fix_version` left to right; the first differing segment at index 0 is major, 1 minor, 2 or later patch. If either is not dotted numerics, say the step cannot be classified. If `mod` is installed, name `DependencyVulnerabilityCheck` with `-P maximumUpgradeDelta=<step>` as the one-command route; it edits Maven and Gradle manifests (direct dependencies by default, transitives with `-P overrideTransitive=true`). Naming it is advice; running it is the user's follow-up.
+   - **Bump.** `fix_version` present: give the coordinate and version and the step from `version`. Compare dotted numeric segments of `version` and `fix_version` left to right; the first differing segment at index 0 is major, 1 minor, 2 or later patch. If either is not dotted numerics, say the step cannot be classified. If `mod` is installed, name the finding's ecosystem recipe (the `ecosystem` of its moderne `sources[]` entry, else inferred from the manifest file in `locations`) with `-P maximumUpgradeDelta=<step>` as the one-command route; it edits that ecosystem's manifests (direct dependencies by default).
+     - Transitives: `-P overrideTransitive=true` for java, python, golang and csharp; `-P transitiveFixStrategy=…` for nodejs.
+     - Naming it is advice; running it is the user's follow-up.
    - **Ask.** A dependency finding with no `fix_version` and no candidates, or with disagreeing candidates for the same package: name each candidate (or say none is known) and ask which to adopt, instead of falling through to the code-change route.
    - **Recipe.** A code finding whose CWE (a `CWE-n` entry in its `identifiers`) maps to an `org.openrewrite.java.security.*` recipe in the table below. Name it only when all three hold: the location is a `.java` file, `mod` is installed, and `mod config recipes search <id> --json=id` returns that id. Anything unmapped, or any failed condition, falls through to the code-change route.
    - **Code change.** Explain the vulnerability class in two sentences and point at `file:line`. Use the source's `solution` text when present. `container` and `unknown` findings use this route when they have a location, else the dismissal route's ask.
@@ -78,6 +82,7 @@ Open vulnerability findings for the current repository from its forge and Modern
 | CWE-377 | `org.openrewrite.java.security.SecureTempFileCreation`, `org.openrewrite.java.security.UseFilesCreateTempDirectory` |
 | CWE-1333 | `org.openrewrite.java.security.RegularExpressionDenialOfService` |
 | CWE-338, CWE-330 | `org.openrewrite.java.security.FixCwe338`, `org.openrewrite.java.security.SecureRandom` |
+| CWE-79 | `org.openrewrite.java.security.xss.FixXssVulnerability` |
 | CWE-250, CWE-269 | `org.openrewrite.java.security.ImproperPrivilegeManagement` |
 
 Verified against `gh 2.104.0`, `glab 1.130.0`, `Moderne CLI 4.12.13`.
