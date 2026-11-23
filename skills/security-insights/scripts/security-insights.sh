@@ -263,6 +263,100 @@ si_source_github() {
     rm -rf "$work"
 }
 
+SI_GITLAB_QUERY='query($fullPath: ID!, $after: String) {
+  project(fullPath: $fullPath) {
+    vulnerabilities(state: [DETECTED, CONFIRMED], first: 100, after: $after) {
+      nodes {
+        id title severity state reportType webUrl solution
+        identifiers { externalType externalId name }
+        location {
+          ... on VulnerabilityLocationDependencyScanning { file dependency { package { name } version } }
+          ... on VulnerabilityLocationSast { file startLine }
+          ... on VulnerabilityLocationSecretDetection { file startLine }
+          ... on VulnerabilityLocationContainerScanning { image dependency { package { name } version } }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}'
+
+SI_GL_MAP='
+def kind: {"DEPENDENCY_SCANNING": "dependency", "SAST": "code", "SECRET_DETECTION": "secret",
+           "CONTAINER_SCANNING": "container"}[.reportType] // "unknown";
+def colon: if (test("@") | not) and (split("/") | length) == 2 then sub("/"; ":") else . end;
+def fix: (.solution // "") | capture("(?s)[Uu]pgrade.*?(?<v>[0-9]+(\\.[0-9]+)+)").v? // null;
+[.data.project.vulnerabilities.nodes[] | (. | kind) as $k | (.location // {}) as $l
+ | {source: "gitlab", native_id: .id, kind: $k,
+    severity_raw: .severity, severity_origin: "source", title: .title,
+    package: (if $k == "dependency" or $k == "container"
+              then {name: ($l.dependency.package.name | if . == null then null else colon end),
+                    version: ($l.dependency.version // null), fix_version: fix, depth: null, scope: null}
+              else null end),
+    identifiers: [(.identifiers // [])[] | select((.externalType // "") | ascii_downcase | IN("cve", "ghsa", "cwe")) | .externalId],
+    locations: (if $k == "container" then (if $l.image != null then [{file: $l.image, line: null}] else [] end)
+                elif $l.file != null then [{file: $l.file, line: ($l.startLine // null)}] else [] end),
+    url: .webUrl, solution: (.solution // null), epss: null, as_of: null}]
+'
+
+# si_gl_check <body> <path> <host> -> SI_READ_REASON set when the page is unusable
+si_gl_check() {
+    local body="$1" path="$2" host="$3"
+    SI_READ_REASON=$(jq -r --arg p "$path" --arg h "$host" '
+        if (.errors // [] | length) > 0 then .errors[0].message
+        elif .data.project == null then "project \($p) not found on \($h) or not visible to this token"
+        elif .data.project.vulnerabilities == null then "vulnerability report unavailable on \($p) (requires GitLab Ultimate)"
+        else empty end' <<<"$body" 2>/dev/null) || SI_READ_REASON="unparseable response"
+}
+
+si_source_gitlab() {
+    local host="$1" path="$2" cursor="" page=0 body err rc work acc status="ok" reason="" more
+    local -a args
+    command -v glab >/dev/null 2>&1 || { si_skipped gitlab "glab not installed"; return 0; }
+    err=$(glab auth status --hostname "$host" 2>&1 >/dev/null) || {
+        si_skipped gitlab "glab auth status --hostname $host failed: $(printf '%s\n' "$err" | head -n 1)"
+        return 0
+    }
+    work=$(mktemp -d "${TMPDIR:-/tmp}/si-gl.XXXXXX")
+    acc="$work/acc.json"
+    printf '[]' > "$acc"
+    while :; do
+        page=$((page+1))
+        args=(api graphql --hostname "$host" -f "query=$SI_GITLAB_QUERY" -f "fullPath=$path")
+        [[ -z "$cursor" ]] || args+=(-f "after=$cursor")
+        rc=0
+        body=$(glab "${args[@]}" 2>"$work/err") || rc=$?
+        err=$(head -n 1 "$work/err")
+        SI_READ_REASON=""
+        if [[ "$rc" -ne 0 ]]; then
+            SI_READ_REASON="${err:-glab api graphql failed}"
+        elif ! jq -e . >/dev/null 2>&1 <<<"$body"; then
+            SI_READ_REASON="${err:-unparseable response}"
+        else
+            si_gl_check "$body" "$path" "$host"
+        fi
+        if [[ -n "$SI_READ_REASON" ]]; then
+            if [[ "$page" -eq 1 ]]; then
+                si_skipped gitlab "$SI_READ_REASON"
+                rm -rf "$work"
+                return 0
+            fi
+            status="partial"; reason="page $page failed: $SI_READ_REASON"
+            break
+        fi
+        jq -c "$SI_GL_MAP" <<<"$body" > "$work/new.json"
+        jq -sc 'add' "$acc" "$work/new.json" > "$work/next.json"
+        mv "$work/next.json" "$acc"
+        more=$(jq -r '.data.project.vulnerabilities.pageInfo | if .hasNextPage == true then .endCursor // "" else "" end' <<<"$body")
+        [[ -n "$more" ]] || break
+        cursor="$more"
+    done
+    jq -nc --arg status "$status" --arg reason "$reason" --slurpfile findings "$acc" '
+        {source: {name: "gitlab", status: $status, reason: (if $reason == "" then null else $reason end), count: 0},
+         findings: $findings[0]}'
+    rm -rf "$work"
+}
+
 si_collect() {
     local dir="$1" repo forge host reason results=""
     repo=$(si_repo_json "$dir")
@@ -272,6 +366,9 @@ si_collect() {
         if [[ -n "$host" ]]; then reason="host $host is not known to gh or glab"; else reason="no git remote"; fi
         results="$(si_skipped gitlab "$reason")
 $(si_skipped github "$reason")"
+    fi
+    if [[ "$forge" == "gitlab" ]]; then
+        results="$(si_source_gitlab "$host" "$(jq -r .path <<<"$repo")")"
     fi
     if [[ "$forge" == "github" ]]; then
         results="$(si_source_github "$host" "$(jq -r .path <<<"$repo")")"

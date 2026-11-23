@@ -58,6 +58,39 @@ cat > "$GHFIX/secret-scanning.json" <<'JSON'
   "secret_type_display_name":"AWS Key","locations_url":"https://api.github.com/repos/o/r/secret-scanning/alerts/3/locations"}]
 JSON
 
+GLFIX="$TMPHOME/glfix"; mkdir "$GLFIX"; export GLFIX
+cat > "$GLFIX/good_page1.json" <<'JSON'
+{"data":{"project":{"vulnerabilities":{
+  "pageInfo":{"hasNextPage":true,"endCursor":"c1"},
+  "nodes":[
+   {"id":"gid://gitlab/Vulnerability/1","title":"Lib is vulnerable","severity":"Critical","reportType":"DEPENDENCY_SCANNING",
+    "webUrl":"https://gitlab.example.com/group/sub/repo/-/security/vulnerabilities/1","solution":"Upgrade to 1.2.4",
+    "identifiers":[{"externalType":"CVE","externalId":"CVE-2024-1"},{"externalType":"GEMNASIUM","externalId":"gemnasium-1"}],
+    "location":{"file":"pom.xml","dependency":{"package":{"name":"org.example/lib"},"version":"1.2.3"}}},
+   {"id":"gid://gitlab/Vulnerability/2","title":"SQL injection","severity":"Info","reportType":"SAST",
+    "webUrl":"https://gitlab.example.com/group/sub/repo/-/security/vulnerabilities/2","solution":null,
+    "identifiers":[{"externalType":"cwe","externalId":"89"}],
+    "location":{"file":"src/B.java","startLine":40}}]}}}}
+JSON
+cat > "$GLFIX/page2.json" <<'JSON'
+{"data":{"project":{"vulnerabilities":{
+  "pageInfo":{"hasNextPage":false,"endCursor":"c2"},
+  "nodes":[
+   {"id":"gid://gitlab/Vulnerability/3","title":"Leaked token","severity":"High","reportType":"SECRET_DETECTION",
+    "webUrl":"https://gitlab.example.com/group/sub/repo/-/security/vulnerabilities/3","solution":null,
+    "identifiers":[],"location":{"file":"config/app.yml","startLine":3}}]}}}}
+JSON
+cat > "$GLFIX/errors.json" <<'JSON'
+{"errors":[{"message":"The resource that you are attempting to access does not exist or you don't have permission"}]}
+JSON
+cat > "$GLFIX/null_project.json" <<'JSON'
+{"data":{"project":null}}
+JSON
+cat > "$GLFIX/null_vulns.json" <<'JSON'
+{"data":{"project":{"vulnerabilities":null}}}
+JSON
+reset_counter() { rm -f "$GLFIX/counter"; }
+
 ARGV_LOG="$TMPHOME/argv.log"; export ARGV_LOG
 : > "$ARGV_LOG"
 
@@ -87,6 +120,12 @@ if [[ "\$1" == "api" && "$cli" == "gh" ]]; then
         exit 1
     fi
     jq -c '.[]' "\$GHFIX/\$ep.json"
+    exit 0
+fi
+if [[ "\$1 \$2" == "api graphql" ]]; then
+    n=0; [[ -f "\$GLFIX/counter" ]] && n=\$(cat "\$GLFIX/counter")
+    n=\$((n+1)); echo "\$n" > "\$GLFIX/counter"
+    cat "\$GLFIX/page\$n.json"
     exit 0
 fi
 echo '[]'
@@ -281,6 +320,44 @@ for e in dependabot code-scanning secret-scanning; do echo 1 > "$GHFIX/$e.rc"; d
 assert_eq "all reads fail -> skipped" skipped "$(si_source_github github.com o/r | jq -r .source.status)"
 assert_eq "gh absent -> skipped" "gh not installed" "$(PATH="$NOGH" si_source_github github.com o/r | jq -r .source.reason)"
 assert_eq "gh unauthenticated -> skipped" "gh auth status --hostname github.com failed: not logged in" "$(KNOWN_GH= si_source_github github.com o/r | jq -r .source.reason)"
+
+echo "si_source_gitlab"
+cp "$GLFIX/good_page1.json" "$GLFIX/page1.json"; reset_counter
+export KNOWN_GL=gitlab.example.com
+: > "$ARGV_LOG"
+r=$(si_source_gitlab gitlab.example.com group/sub/repo)
+assert_eq "two pages read" 2 "$(grep -c 'api graphql' "$ARGV_LOG")"
+assert_contains "graphql call carries --hostname" "--hostname gitlab.example.com" "$(cat "$ARGV_LOG")"
+assert_contains "graphql call passes fullPath" "fullPath=group/sub/repo" "$(cat "$ARGV_LOG")"
+assert_contains "page 2 passes the cursor" "after=c1" "$(cat "$ARGV_LOG")"
+assert_eq "status ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "three findings across pages" 3 "$(jq '.findings|length' <<<"$r")"
+assert_eq "dependency kind from reportType" dependency "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").kind' <<<"$r")"
+assert_eq "package name colon form" "org.example:lib" "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").package.name' <<<"$r")"
+assert_eq "package version" 1.2.3 "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").package.version' <<<"$r")"
+assert_eq "fix version from solution" 1.2.4 "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").package.fix_version' <<<"$r")"
+assert_eq "identifiers keep only cve/ghsa/cwe" '["CVE-2024-1"]' "$(jq -c '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1").identifiers' <<<"$r")"
+assert_eq "cwe identifier case-insensitive" '["89"]' "$(jq -c '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").identifiers' <<<"$r")"
+assert_eq "INFO severity raw kept" Info "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").severity_raw' <<<"$r")"
+assert_eq "sast location" 'src/B.java:40' "$(jq -r '.findings[]|select(.kind=="code").locations[0]|"\(.file):\(.line)"' <<<"$r")"
+assert_eq "code package null" null "$(jq -c '.findings[]|select(.kind=="code").package' <<<"$r")"
+assert_eq "secret kind" secret "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/3").kind' <<<"$r")"
+assert_eq "empty identifiers is an array" '[]' "$(jq -c '.findings[]|select(.kind=="secret").identifiers' <<<"$r")"
+assert_eq "scope null" null "$(jq -r '.findings[0].package.scope' <<<"$r")"
+assert_eq "no reads for gitlab" null "$(jq -c '.source.reads' <<<"$r")"
+cp "$GLFIX/errors.json" "$GLFIX/page1.json"; reset_counter
+assert_eq "errors[] on page 1 -> skipped with message" "The resource that you are attempting to access does not exist or you don't have permission" "$(si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
+cp "$GLFIX/null_project.json" "$GLFIX/page1.json"; reset_counter
+assert_eq "null project reason" "project g/r not found on gitlab.example.com or not visible to this token" "$(si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
+cp "$GLFIX/null_vulns.json" "$GLFIX/page1.json"; reset_counter
+assert_eq "null vulnerabilities reason" "vulnerability report unavailable on g/r (requires GitLab Ultimate)" "$(si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
+cp "$GLFIX/good_page1.json" "$GLFIX/page1.json"; cp "$GLFIX/errors.json" "$GLFIX/page2.json"; reset_counter
+r=$(si_source_gitlab gitlab.example.com g/r)
+assert_eq "page 2 failure -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_contains "partial reason names page" "page 2 failed:" "$(jq -r .source.reason <<<"$r")"
+assert_eq "page 1 findings kept" 2 "$(jq '.findings|length' <<<"$r")"
+assert_eq "glab absent -> skipped" "glab not installed" "$(PATH="$NOGLAB" si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
+assert_eq "glab unauthenticated -> skipped" "glab auth status --hostname gitlab.example.com failed: not logged in" "$(KNOWN_GL= si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
 
 echo
 printf 'Total: %d pass, %d fail\n' "$PASS" "$FAIL"
