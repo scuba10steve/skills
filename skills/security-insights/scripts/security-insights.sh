@@ -141,7 +141,10 @@ def merge:
   | .[0] as $first
   | ([.[].adv[]] | unique) as $adv
   | (sort_by(.severity | sev_rank) | .[0]) as $worst
-  | [.[] | select(.package.fix_version != null) | {source, version: .package.fix_version}] as $fixes
+  | $first.package.name as $pname
+  | [.[] | select(.package != null and .package.name == $pname)] as $same
+  | [.[] | select(.package.fix_version != null) | {source, version: .package.fix_version, package: .package.name}] as $fixes
+  | ([$fixes[] | select(.package == $pname) | .version] | unique) as $own_fixes
   | "\($first.source):\($first.kind):\($first.native_id)" as $native_key
   | {key: (if $first.kind | IN("dependency", "container") | not then $native_key
            else first($adv[] | select(startswith("CVE-")))
@@ -154,14 +157,16 @@ def merge:
      title: $first.title,
      kind: $first.kind,
      package: (if $first.package == null then null else
-       {name: $first.package.name, version: $first.package.version,
-        fix_version: (if ($fixes | map(.version) | unique | length) == 1 then $fixes[0].version else null end),
+       {name: $pname,
+        version: (first($same[].package.version // empty) // null),
+        fix_version: (if ($own_fixes | length) == 1 then $own_fixes[0] else null end),
         fix_candidates: ($fixes | unique),
-        depth: (first(.[].package.depth // empty) // null),
-        scope: (first(.[].package.scope // empty) // null)} end),
+        depth: (first($same[].package.depth // empty) // null),
+        scope: (first($same[].package.scope // empty) // null)} end),
      identifiers: ([.[].identifiers[]] | ordered_unique),
      locations: ([.[].locations[]] | ordered_unique),
-     sources: map({name: .source, id: .native_id, severity_raw, url, solution}
+     sources: map({name: .source, id: .native_id, severity_raw, url, solution,
+                   package: (if .package == null then null else .package | {name, version, fix_version} end)}
                   + (if .epss != null then {epss} else {} end)
                   + (if .as_of != null then {as_of} else {} end))};
 

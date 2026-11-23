@@ -313,6 +313,23 @@ assert_eq "containers merge on CVE" 1 "$(shape "$(two_containers gitlab CVE-2024
 # merged package fields: gitlab member has depth null, scope null; moderne member has depth transitive, scope test
 p=$(shape "$(two_deps_pkg gitlab CVE-2024-1 null null moderne CVE-2024-1 transitive test)" | jq -c '.findings[0].package|{name,version,depth,scope}')
 assert_eq "merged package takes first-source name/version, first non-null depth/scope" '{"name":"org.example:lib","version":"1.2.3","depth":"transitive","scope":"test"}' "$p"
+# raw_pkg <source> <native_id> <ids_csv> <name> <version|null> [fix_version]
+raw_pkg() {
+    raw_finding "$1" "$2" dependency high source "$3" "${6:-}" \
+        | jq -c --arg n "$4" --arg v "$5" '.package.name = $n | .package.version = (if $v == "null" then null else $v end)'
+}
+c=$(shape "$({ raw_pkg moderne 1 CVE-2024-5 org.ex:lib 1.2.3 1.2.4
+               raw_pkg moderne 2 CVE-2024-5 org.ex:lib-core 2.0.0 2.0.1
+               raw_pkg github 3 CVE-2024-5 org.ex:lib null; } | shape_input)")
+assert_eq "multi-artifact CVE is one finding" 1 "$(jq '.findings|length' <<<"$c")"
+assert_eq "multi-artifact package is the first member's" org.ex:lib "$(jq -r '.findings[0].package.name' <<<"$c")"
+assert_eq "fix_version only from same-package candidates" 1.2.4 "$(jq -r '.findings[0].package.fix_version' <<<"$c")"
+assert_eq "other artifact's candidate kept with its package" true "$(jq '.findings[0].package.fix_candidates|any(.package=="org.ex:lib-core" and .version=="2.0.1")' <<<"$c")"
+assert_eq "sources carry each member's package" '["org.ex:lib","org.ex:lib-core"]' "$(jq -c '[.findings[0].sources[].package.name]|unique' <<<"$c")"
+assert_eq "source package carries version and fix" '{"name":"org.ex:lib-core","version":"2.0.0","fix_version":"2.0.1"}' "$(jq -c '.findings[0].sources[]|select(.id=="2").package' <<<"$c")"
+assert_eq "code source package is null" null "$(shape "$(one_finding github 42 code high source)" | jq -c '.findings[0].sources[0].package')"
+v=$(shape "$({ raw_pkg github 1 CVE-2024-6 org.example:lib null; raw_pkg moderne 2 CVE-2024-6 org.example:lib 1.2.3 1.2.4; } | shape_input)")
+assert_eq "merged version is first non-null same-package version" 1.2.3 "$(jq -r '.findings[0].package.version' <<<"$v")"
 
 echo "si_source_github"
 export KNOWN_GH=github.com
