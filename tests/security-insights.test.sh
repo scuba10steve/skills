@@ -52,6 +52,7 @@ DEEPREPO="$TMPHOME/deep";   mkrepo "$DEEPREPO";  mkdir "$DEEPREPO/web"; : > "$DE
 DEEPMIX="$TMPHOME/deepmix"; mkrepo "$DEEPMIX";   mkdir "$DEEPMIX/frontend"; : > "$DEEPMIX/build.gradle"; : > "$DEEPMIX/frontend/package.json"
 NMREPO="$TMPHOME/nm";       mkrepo "$NMREPO";    mkdir -p "$NMREPO/node_modules/x"; : > "$NMREPO/node_modules/x/package.json"
 TOODEEP="$TMPHOME/toodeep"; mkrepo "$TOODEEP";   mkdir -p "$TOODEEP/a/b/c/d"; : > "$TOODEEP/a/b/c/d/package.json"
+DEPTH3="$TMPHOME/depth3";   mkrepo "$DEPTH3";    mkdir -p "$DEPTH3/a/b/c"; : > "$DEPTH3/a/b/c/package.json"
 BUILDREPO="$TMPHOME/bld";   mkrepo "$BUILDREPO"; mkdir "$BUILDREPO/build"; : > "$BUILDREPO/build/package.json"
 MIXREPO="$TMPHOME/mix";     mkrepo "$MIXREPO";   : > "$MIXREPO/build.gradle"; : > "$MIXREPO/package.json"
 
@@ -518,12 +519,14 @@ assert_eq "package.json one level down is detected" nodejs "$(si_mod_ecosystems 
 assert_eq "root gradle plus nested package.json" $'java\nnodejs' "$(si_mod_ecosystems "$DEEPMIX")"
 assert_eq "node_modules is skipped" "" "$(si_mod_ecosystems "$NMREPO")"
 assert_eq "four levels down is not searched" "" "$(si_mod_ecosystems "$TOODEEP")"
+assert_eq "package.json three levels down is detected" nodejs "$(si_mod_ecosystems "$DEPTH3")"
 assert_eq "build directory is skipped" "" "$(si_mod_ecosystems "$BUILDREPO")"
 assert_eq "two ecosystems in order" $'java\nnodejs' "$(si_mod_ecosystems "$MIXREPO")"
 assert_eq "mod absent" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$JVMREPO" 0 | reason_of)"
 assert_eq "mod probed before ecosystem detection" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$REPO" 0 | reason_of)"
 mod_use list=list_empty.json
-assert_eq "no LST" "no Moderne LST for this repository; run: mod build ." "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
+assert_eq "no LST" "no Moderne LST for this repository; run: mod build . (detected: java)" "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
+assert_eq "no LST lists detected ecosystems in order" "no Moderne LST for this repository; run: mod build . (detected: java, nodejs)" "$(si_source_moderne "$MIXREPO" 0 | reason_of)"
 assert_eq "no java run names the ecosystem" "no java DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck" "$(mod_use list=list_good.json history=history_other_recipe.json; si_source_moderne "$JVMREPO" 0 | reason_of)"
 mod_use history=history_bad.txt
 assert_eq "unparseable history" "run-history output not understood" "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
@@ -586,6 +589,12 @@ assert_eq "direct:false maps to transitive" transitive "$(jq -r '.findings[0].pa
 assert_eq "lower-case cwes split" '["CVE-2024-7","CWE-1321"]' "$(jq -c '.findings[0].identifiers' <<<"$r")"
 assert_eq "ecosystem on finding" nodejs "$(jq -r '.findings[0].ecosystem' <<<"$r")"
 assert_eq "nodejs read named by ecosystem" '[{"name":"nodejs","status":"ok"}]' "$(jq -c .source.reads <<<"$r")"
+mod_use history=history_nodejs.json
+cp "$MODFIX/study_nodejs.json" "$MODFIX/study_nodejs.orig"
+sed 's/"direct":false/"depth":"3"/' "$MODFIX/study_nodejs.orig" > "$MODFIX/study_nodejs.json"
+r=$(si_source_moderne "$NODEREPO" 0)
+mv "$MODFIX/study_nodejs.orig" "$MODFIX/study_nodejs.json"
+assert_eq "numeric-string depth maps to transitive" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
 mod_use history=history_java_and_nodejs.json study=study_good.json
 : > "$ARGV_LOG"; r=$(si_source_moderne "$MIXREPO" 0)
 assert_eq "two reads" 2 "$(jq '.source.reads|length' <<<"$r")"

@@ -438,7 +438,9 @@ SI_MOD_MAP='
 def opt: if . == null or . == "" then null else . end;
 def cwes: (.CWEs // .cwes // "" | tostring) | [splits("[,;]")] | map(gsub("^\\s+|\\s+$"; "")) | map(select(. != ""))
           | map(if test("^[0-9]+$") then "cwe-" + . else . end);
-def depth_label: opt | if . == null then null elif type == "number" then (if . == 0 then "direct" else "transitive" end)
+def depth_label: opt | if . == null then null
+                       elif type == "number" then (if . == 0 then "direct" else "transitive" end)
+                       elif type == "string" and test("^[0-9]+$") then (if tonumber == 0 then "direct" else "transitive" end)
                        else ascii_downcase end;
 if type != "array" then error("not an array") else
 [to_entries[] | .key as $i | .value
@@ -497,7 +499,7 @@ si_source_moderne() {
     if [[ "$moderne_run" == 1 ]] && ! si_mod_step build "$dir"; then si_skipped moderne "$SI_READ_REASON"; return 0; fi
     si_mod_list "$dir"
     if [[ -z "$SI_MOD_ORIGIN" ]]; then
-        si_skipped moderne "no Moderne LST for this repository; run: mod build ."
+        si_skipped moderne "no Moderne LST for this repository; run: mod build . (detected: $(tr '\n' ',' <<<"$ecos" | sed 's/,$//; s/,/, /g'))"
         return 0
     fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/si-mod.XXXXXX")
