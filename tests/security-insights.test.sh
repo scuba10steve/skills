@@ -41,6 +41,8 @@ NOREMOTE="$TMPHOME/noremote"; mkrepo "$NOREMOTE"
 JVMREPO="$TMPHOME/jvm";     mkrepo "$JVMREPO"
 : > "$JVMREPO/pom.xml"
 git -C "$JVMREPO" remote add origin https://github.com/o/jvm.git
+GRADLEREPO="$TMPHOME/gradle"; mkrepo "$GRADLEREPO"
+: > "$GRADLEREPO/settings.gradle.kts"
 
 GHFIX="$TMPHOME/ghfix"; mkdir "$GHFIX"; export GHFIX
 cat > "$GHFIX/dependabot.json" <<'JSON'
@@ -90,6 +92,9 @@ JSON
 cat > "$GLFIX/null_vulns.json" <<'JSON'
 {"data":{"project":{"vulnerabilities":null}}}
 JSON
+cat > "$GLFIX/null_nodes.json" <<'JSON'
+{"data":{"project":{"vulnerabilities":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":null}}}}
+JSON
 MODFIX="$TMPHOME/modfix"; mkdir "$MODFIX"; export MODFIX
 cat > "$MODFIX/list_good.json" <<'JSON'
 [{"origin":"github.com","path":"o/jvm","branch":"main","rootDir":"file:///work/jvm"}]
@@ -112,6 +117,10 @@ cat > "$MODFIX/study.json" <<'JSON'
 {"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"","groupId":"org.example","artifactId":"other","version":"2.0.0","fixedVersion":"","lastAffectedVersion":"2.0.0","versionWithinDelta":"","summary":"Other is vulnerable","severity":"MODERATE","depth":0,"CWEs":"","epss":null},
 {"repositoryOrigin":"github.com","repositoryPath":"o/elsewhere","repositoryBranch":"main","projectName":"x","cve":"CVE-2024-9","groupId":"org.example","artifactId":"far","version":"9.0.0","fixedVersion":"9.0.1","lastAffectedVersion":"9.0.0","versionWithinDelta":"","summary":"Far","severity":"HIGH","depth":"Direct","CWEs":"","epss":0.1}
 ]
+JSON
+cat > "$MODFIX/study_bad_row.json" <<'JSON'
+[{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","cve":"CVE-2024-1","groupId":"org.example","artifactId":"lib","version":"1.2.3","fixedVersion":"1.2.4","severity":"HIGH","depth":0},
+ "not a row"]
 JSON
 cp "$MODFIX/list_good.json" "$MODFIX/list.json"; cp "$MODFIX/history_good.json" "$MODFIX/history.json"
 reset_counter() { rm -f "$GLFIX/counter"; }
@@ -163,7 +172,8 @@ case "$1" in
     list) cat "$MODFIX/list.json" ;;
     run-history) cat "$MODFIX/history.json" ;;
     study) if [[ -f "$MODFIX/study.rc" ]]; then exit 1; fi; cat "$MODFIX/study.json" ;;
-    build|run) if [[ -f "$MODFIX/$1.rc" ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi ;;
+    build|run) if [[ -f "$MODFIX/$1.rc" ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi
+               if [[ "$1" == build && -f "$MODFIX/build.writes" ]]; then cp "$MODFIX/list_good.json" "$MODFIX/list.json"; fi ;;
 esac
 exit 0
 FAKE
@@ -330,6 +340,10 @@ assert_eq "source package carries version and fix" '{"name":"org.ex:lib-core","v
 assert_eq "code source package is null" null "$(shape "$(one_finding github 42 code high source)" | jq -c '.findings[0].sources[0].package')"
 v=$(shape "$({ raw_pkg github 1 CVE-2024-6 org.example:lib null; raw_pkg moderne 2 CVE-2024-6 org.example:lib 1.2.3 1.2.4; } | shape_input)")
 assert_eq "merged version is first non-null same-package version" 1.2.3 "$(jq -r '.findings[0].package.version' <<<"$v")"
+rc=0; n=$(jq -c '.results[0].findings = null' <<<"$(one_finding github 1 code high source)" | si_shape) || rc=$?
+assert_eq "null findings still shapes" "0 0" "$rc $(jq '.findings|length' <<<"$n")"
+rc=0; n=$(jq -c '.results[0].findings[0].identifiers = [null, "CVE-2024-1"] | .results[0].findings[0].locations = null' <<<"$(dep_finding github 1 CVE-2024-1)" | si_shape) || rc=$?
+assert_eq "null identifier and locations still shape" '0 ["CVE-2024-1"] []' "$rc $(jq -c '.findings[0].identifiers' <<<"$n") $(jq -c '.findings[0].locations' <<<"$n")"
 
 echo "si_source_github"
 export KNOWN_GH=github.com
@@ -352,6 +366,11 @@ assert_eq "failed read named" 'HTTP 403: Code scanning is not enabled for this r
 printf '[]' > "$GHFIX/dependabot.json"; : > "$GHFIX/code-scanning.rc"
 r=$(si_source_github github.com o/r)
 assert_eq "empty array read is ok" ok "$(jq -r '.source.reads[]|select(.name=="dependabot").status' <<<"$r")"
+cp "$GHFIX/secret-scanning.json" "$GHFIX/secret-scanning.good"; printf '[1]' > "$GHFIX/secret-scanning.json"
+r=$(si_source_github github.com o/r)
+assert_contains "unmappable read is skipped as not understood" "github output not understood: " "$(jq -r '.source.reads[]|select(.name=="secret-scanning").reason' <<<"$r")"
+assert_eq "unmappable read leaves source partial" partial "$(jq -r .source.status <<<"$r")"
+cp "$GHFIX/secret-scanning.good" "$GHFIX/secret-scanning.json"
 cp "$GHFIX/dependabot.json" "$GHFIX/dependabot.small"
 jq -n '[range(300) | {number: ., html_url: "https://github.com/o/r/security/dependabot/\(.)",
     security_advisory: {severity: "high", summary: "advisory \(.)", cve_id: "CVE-2024-\(.)", ghsa_id: "GHSA-\(.)",
@@ -404,6 +423,13 @@ r=$(si_source_gitlab gitlab.example.com g/r)
 assert_eq "page 2 failure -> partial" partial "$(jq -r .source.status <<<"$r")"
 assert_contains "partial reason names page" "page 2 failed:" "$(jq -r .source.reason <<<"$r")"
 assert_eq "page 1 findings kept" 2 "$(jq '.findings|length' <<<"$r")"
+cp "$GLFIX/null_nodes.json" "$GLFIX/page1.json"; reset_counter
+r=$(si_source_gitlab gitlab.example.com g/r)
+assert_eq "null nodes -> skipped, not ok" skipped "$(jq -r .source.status <<<"$r")"
+assert_contains "null nodes reason" "gitlab output not understood: " "$(jq -r .source.reason <<<"$r")"
+cp "$GLFIX/good_page1.json" "$GLFIX/page1.json"; cp "$GLFIX/null_nodes.json" "$GLFIX/page2.json"; reset_counter
+r=$(si_source_gitlab gitlab.example.com g/r)
+assert_contains "null nodes on page 2 -> partial" "partial page 2 failed: gitlab output not understood: " "$(jq -r '"\(.source.status) \(.source.reason)"' <<<"$r")"
 assert_eq "glab absent -> skipped" "glab not installed" "$(PATH="$NOGLAB" si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
 assert_eq "glab unauthenticated -> skipped" "glab auth status --hostname gitlab.example.com failed: not logged in" "$(KNOWN_GL= si_source_gitlab gitlab.example.com g/r | jq -r .source.reason)"
 
@@ -454,6 +480,19 @@ assert_eq "build failure skips" "mod build failed: build exploded" "$(si_source_
 rm -f "$MODFIX/build.rc"; : > "$MODFIX/run.rc"
 assert_eq "run failure skips" "mod run failed: run exploded" "$(si_source_moderne "$JVMREPO" 1 2>/dev/null | jq -r .source.reason)"
 rm -f "$MODFIX/run.rc"
+assert_eq "settings.gradle.kts passes the JVM check" ok "$(si_source_moderne "$GRADLEREPO" 0 | jq -r .source.status)"
+cp "$MODFIX/study.json" "$MODFIX/study_good.json"; cp "$MODFIX/study_bad_row.json" "$MODFIX/study.json"
+r=$(si_source_moderne "$JVMREPO" 0)
+assert_eq "non-object row -> skipped" skipped "$(jq -r .source.status <<<"$r")"
+assert_contains "non-object row reason" "moderne output not understood: " "$(jq -r .source.reason <<<"$r")"
+cp "$MODFIX/study_good.json" "$MODFIX/study.json"
+printf '[]' > "$MODFIX/list.json"; : > "$MODFIX/build.writes"; : > "$ARGV_LOG"
+r=$(si_source_moderne "$JVMREPO" 1 2>/dev/null)
+assert_eq "--moderne-run recovers from no LST" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "no-LST recovery builds once then runs" "mod build|mod run" "$(grep -oE 'mod (build|run) ' "$ARGV_LOG" | sed 's/ $//' | paste -sd'|' -)"
+rm -f "$MODFIX/build.writes"; cp "$MODFIX/list_good.json" "$MODFIX/list.json"
+r=$( (si_source_moderne() { printf '{"source":{"name":"moderne","status":"ok"},"findings":null}\n'; }; si_collect "$JVMREPO" 0) 2>/dev/null)
+assert_eq "malformed source result replaced" "skipped moderne result malformed" "$(jq -r '.sources[]|select(.name=="moderne")|"\(.status) \(.reason)"' <<<"$r")"
 out=$(SECURITY_INSIGHTS_LIB= "$BASH" "$SCRIPT" --repo "$JVMREPO" 2>/dev/null)
 assert_eq "collect includes moderne source" 1 "$(jq '[.sources[]|select(.name=="moderne" and .status=="ok")]|length' <<<"$out")"
 

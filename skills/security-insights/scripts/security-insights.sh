@@ -121,7 +121,9 @@ def norm_sev:
     else "unknown" end;
 def ordered_unique: reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end);
 def normalise:
-  .identifiers |= map(if test("^(cve|ghsa)-"; "i") then ascii_upcase else . end)
+  .identifiers = (.identifiers // [] | map(select(type == "string")
+                  | if test("^(cve|ghsa)-"; "i") then ascii_upcase else . end))
+  | .locations = (.locations // [])
   | .adv = [.identifiers[] | select(startswith("CVE-") or startswith("GHSA-"))]
   | .severity = (if .severity_origin == "policy" then "critical" else .severity_raw | norm_sev end);
 # Lists of finding indexes that must share a group: one per advisory id, and one per
@@ -170,7 +172,7 @@ def merge:
                   + (if .epss != null then {epss} else {} end)
                   + (if .as_of != null then {as_of} else {} end))};
 
-[.results[] | .findings |= unique_by([.source, .native_id])] as $results
+[.results[] | .findings = (.findings // [] | unique_by([.source, .native_id]))] as $results
 | [$results[].findings[] | normalise] as $raw
 | components($raw | length; $raw | link_sets) as $labels
 | ([range($raw | length)] | group_by($labels[.]) | map(map($raw[.]) | merge)
@@ -248,15 +250,19 @@ si_source_github() {
         filter="${endpoint//-/_}"
         total=$((total+1))
         si_gh_read "$host" "$path" "$endpoint/alerts"
+        if [[ -z "$SI_READ_REASON" ]]; then
+            if jq -c "$SI_GH_MAP"'[.[] | '"$filter"']' <<<"$SI_READ_JSON" > "$work/new.json" 2>"$work/err"; then
+                ok=$((ok+1))
+                reads=$(jq -c --arg n "$endpoint" '. + [{name: $n, status: "ok"}]' <<<"$reads")
+                jq -sc 'add' "$acc" "$work/new.json" > "$work/next.json"
+                mv "$work/next.json" "$acc"
+            else
+                SI_READ_REASON="github output not understood: $(head -n 1 "$work/err")"
+            fi
+        fi
         if [[ -n "$SI_READ_REASON" ]]; then
             reads=$(jq -c --arg n "$endpoint" --arg r "$SI_READ_REASON" '. + [{name: $n, status: "skipped", reason: $r}]' <<<"$reads")
             if [[ -n "$reasons" ]]; then reasons="$reasons; $SI_READ_REASON"; else reasons="$SI_READ_REASON"; fi
-        else
-            ok=$((ok+1))
-            reads=$(jq -c --arg n "$endpoint" '. + [{name: $n, status: "ok"}]' <<<"$reads")
-            jq -c "$SI_GH_MAP"'[.[] | '"$filter"']' <<<"$SI_READ_JSON" > "$work/new.json"
-            jq -sc 'add' "$acc" "$work/new.json" > "$work/next.json"
-            mv "$work/next.json" "$acc"
         fi
     done
     jq -nc --argjson reads "$reads" --slurpfile findings "$acc" --arg reasons "$reasons" --argjson ok "$ok" --argjson total "$total" '
@@ -340,6 +346,9 @@ si_source_gitlab() {
         else
             si_gl_check "$body" "$path" "$host"
         fi
+        if [[ -z "$SI_READ_REASON" ]] && ! jq -c "$SI_GL_MAP" <<<"$body" > "$work/new.json" 2>"$work/err"; then
+            SI_READ_REASON="gitlab output not understood: $(head -n 1 "$work/err")"
+        fi
         if [[ -n "$SI_READ_REASON" ]]; then
             if [[ "$page" -eq 1 ]]; then
                 si_skipped gitlab "$SI_READ_REASON"
@@ -349,7 +358,6 @@ si_source_gitlab() {
             status="partial"; reason="page $page failed: $SI_READ_REASON"
             break
         fi
-        jq -c "$SI_GL_MAP" <<<"$body" > "$work/new.json"
         jq -sc 'add' "$acc" "$work/new.json" > "$work/next.json"
         mv "$work/next.json" "$acc"
         more=$(jq -r '.data.project.vulnerabilities.pageInfo | if .hasNextPage == true then .endCursor // "" else "" end' <<<"$body")
@@ -394,29 +402,56 @@ si_mod_as_of() {
     printf '%s-%s-%sT%s:%s:%s%s:%s' "${ts:0:4}" "${ts:4:2}" "${ts:6:2}" "${ts:8:2}" "${ts:10:2}" "${ts:12:2}" "${z:0:3}" "${z:3:2}"
 }
 
+SI_MOD_ORIGIN="" SI_MOD_PATH=""
+
+# si_mod_list <dir> -> SI_MOD_ORIGIN, SI_MOD_PATH (empty when there is no LST)
+si_mod_list() {
+    local listing
+    SI_MOD_ORIGIN="" SI_MOD_PATH=""
+    listing=$(mod list --json "$1" 2>/dev/null) || return 0
+    SI_MOD_ORIGIN=$(jq -r '.[0].origin // empty' <<<"$listing" 2>/dev/null) || SI_MOD_ORIGIN=""
+    SI_MOD_PATH=$(jq -r '.[0].path // empty' <<<"$listing" 2>/dev/null) || SI_MOD_PATH=""
+    [[ -n "$SI_MOD_PATH" ]] || SI_MOD_ORIGIN=""
+}
+
+# si_mod_step <build|run> <args...> -> streams progress to stderr; on failure prints the skipped result, returns 1
+si_mod_step() {
+    local step="$1" errf
+    errf=$(mktemp "${TMPDIR:-/tmp}/si-mod.XXXXXX")
+    if mod "$@" >&2 2>"$errf"; then
+        cat "$errf" >&2; rm -f "$errf"; return 0
+    fi
+    si_skipped moderne "mod $step failed: $(head -n 1 "$errf")"
+    cat "$errf" >&2; rm -f "$errf"
+    return 1
+}
+
 si_source_moderne() {
-    local dir="$1" moderne_run="$2" work rc=0 msg listing history entry run_id scope origin path as_of
+    local dir="$1" moderne_run="$2" work rc=0 msg history entry run_id scope origin path as_of f jvm=0 built=0
     command -v mod >/dev/null 2>&1 || { si_skipped moderne "mod not installed"; return 0; }
-    if [[ ! -f "$dir/pom.xml" && ! -f "$dir/build.gradle" && ! -f "$dir/build.gradle.kts" ]]; then
+    for f in pom.xml build.gradle build.gradle.kts settings.gradle settings.gradle.kts; do
+        if [[ -f "$dir/$f" ]]; then jvm=1; fi
+    done
+    if [[ "$jvm" -eq 0 ]]; then
         si_skipped moderne "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only"
         return 0
     fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/si-mod.XXXXXX")
-    listing=$(mod list --json "$dir" 2>/dev/null) || rc=$?
-    origin=$(jq -r '.[0].origin // empty' <<<"$listing" 2>/dev/null) || origin=""
-    path=$(jq -r '.[0].path // empty' <<<"$listing" 2>/dev/null) || path=""
-    if [[ "$rc" -ne 0 || -z "$origin" || -z "$path" ]]; then
+    si_mod_list "$dir"
+    if [[ -z "$SI_MOD_ORIGIN" && "$moderne_run" == 1 ]]; then
+        si_mod_step build "$dir" || { rm -rf "$work"; return 0; }
+        built=1
+        si_mod_list "$dir"
+    fi
+    origin="$SI_MOD_ORIGIN" path="$SI_MOD_PATH"
+    if [[ -z "$origin" ]]; then
         si_skipped moderne "no Moderne LST for this repository; run: mod build ."
         rm -rf "$work"
         return 0
     fi
     if [[ "$moderne_run" == 1 ]]; then
-        mod build "$dir" >&2 2>"$work/err" || {
-            si_skipped moderne "mod build failed: $(head -n 1 "$work/err")"; cat "$work/err" >&2; rm -rf "$work"; return 0; }
-        cat "$work/err" >&2
-        mod run "$dir" --recipe "$SI_MOD_RECIPE" >&2 2>"$work/err" || {
-            si_skipped moderne "mod run failed: $(head -n 1 "$work/err")"; cat "$work/err" >&2; rm -rf "$work"; return 0; }
-        cat "$work/err" >&2
+        if [[ "$built" -eq 0 ]]; then si_mod_step build "$dir" || { rm -rf "$work"; return 0; }; fi
+        si_mod_step run "$dir" --recipe "$SI_MOD_RECIPE" || { rm -rf "$work"; return 0; }
     fi
     history=$(mod run-history --json --most-recent "$dir" 2>/dev/null) || history=""
     if ! jq -e 'type == "object"' >/dev/null 2>&1 <<<"$history"; then
@@ -441,11 +476,24 @@ si_source_moderne() {
         rm -rf "$work"
         return 0
     fi
-    jq -c --arg col "$SI_MOD_ROW_PATH_COL" --arg path "$path" --arg origin "$origin" --arg as_of "$as_of" \
-        --argjson scope "$scope" "$SI_MOD_MAP" "$work/study.json" > "$work/findings.json"
+    if ! jq -c --arg col "$SI_MOD_ROW_PATH_COL" --arg path "$path" --arg origin "$origin" --arg as_of "$as_of" \
+        --argjson scope "$scope" "$SI_MOD_MAP" "$work/study.json" > "$work/findings.json" 2>"$work/err"; then
+        si_skipped moderne "moderne output not understood: $(head -n 1 "$work/err")"
+        rm -rf "$work"
+        return 0
+    fi
     jq -nc --slurpfile findings "$work/findings.json" '
         {source: {name: "moderne", status: "ok", reason: null, count: 0}, findings: $findings[0]}'
     rm -rf "$work"
+}
+
+# si_checked <name> <result> -> the result, or a skipped entry when its findings are not an array
+si_checked() {
+    if jq -e '.findings | type == "array"' >/dev/null 2>&1 <<<"$2"; then
+        printf '%s\n' "$2"
+    else
+        si_skipped "$1" "$1 result malformed"
+    fi
 }
 
 si_collect() {
@@ -459,13 +507,13 @@ si_collect() {
 $(si_skipped github "$reason")"
     fi
     if [[ "$forge" == "gitlab" ]]; then
-        results="$(si_source_gitlab "$host" "$(jq -r .path <<<"$repo")")"
+        results=$(si_checked gitlab "$(si_source_gitlab "$host" "$(jq -r .path <<<"$repo")")")
     fi
     if [[ "$forge" == "github" ]]; then
-        results="$(si_source_github "$host" "$(jq -r .path <<<"$repo")")"
+        results=$(si_checked github "$(si_source_github "$host" "$(jq -r .path <<<"$repo")")")
     fi
     results="$results
-$(si_source_moderne "$dir" "$moderne_run")"
+$(si_checked moderne "$(si_source_moderne "$dir" "$moderne_run")")"
     printf '%s\n' "$results" | jq -sc --argjson repo "$repo" '{repo: $repo, results: .}' | si_shape
 }
 
