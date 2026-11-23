@@ -374,7 +374,7 @@ def cwes: (.CWEs // "" | tostring) | [splits("[,;]")] | map(gsub("^\\s+|\\s+$"; 
     title: ((.summary | opt) // .cve),
     package: {name: "\(.groupId):\(.artifactId)", version: (.version | opt),
               fix_version: (.fixedVersion | opt),
-              depth: (.depth | opt | if . == null then null else ascii_downcase end),
+              depth: (.depth | opt | if . == null then null elif type == "number" then (if . == 0 then "direct" else "transitive" end) else ascii_downcase end),
               scope: $scope},
     identifiers: ([.cve | opt] | map(select(. != null))) + cwes,
     locations: [], url: null, solution: null,
@@ -390,7 +390,7 @@ si_mod_as_of() {
 }
 
 si_source_moderne() {
-    local dir="$1" moderne_run="$2" work rc=0 listing history entry run_id scope origin path as_of
+    local dir="$1" moderne_run="$2" work rc=0 msg listing history entry run_id scope origin path as_of
     command -v mod >/dev/null 2>&1 || { si_skipped moderne "mod not installed"; return 0; }
     if [[ ! -f "$dir/pom.xml" && ! -f "$dir/build.gradle" && ! -f "$dir/build.gradle.kts" ]]; then
         si_skipped moderne "not a JVM project; DependencyVulnerabilityCheck covers Maven and Gradle only"
@@ -431,7 +431,8 @@ si_source_moderne() {
     rc=0
     mod study "$dir" "--recipe-run=$run_id" --data-table "$SI_MOD_TABLE" --json >"$work/study.json" 2>"$work/err" || rc=$?
     if [[ "$rc" -ne 0 ]] || ! jq -e 'type == "array"' "$work/study.json" >/dev/null 2>&1; then
-        si_skipped moderne "mod study failed: $(head -n 1 "$work/err")"
+        msg=$(head -n 1 "$work/err")
+        si_skipped moderne "mod study failed: ${msg:-exit $rc, no error output}"
         rm -rf "$work"
         return 0
     fi

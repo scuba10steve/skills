@@ -108,8 +108,8 @@ cat > "$MODFIX/history_noscope.json" <<'JSON'
 JSON
 cat > "$MODFIX/study.json" <<'JSON'
 [
-{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"CVE-2024-1","groupId":"org.example","artifactId":"lib","version":"1.2.3","fixedVersion":"1.2.4","lastAffectedVersion":"1.2.3","versionWithinDelta":"","summary":"Lib is vulnerable","severity":"CRITICAL","depth":"Transitive","CWEs":"CWE-79, 611","epss":0.42},
-{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"","groupId":"org.example","artifactId":"other","version":"2.0.0","fixedVersion":"","lastAffectedVersion":"2.0.0","versionWithinDelta":"","summary":"Other is vulnerable","severity":"MODERATE","depth":"Direct","CWEs":"","epss":null},
+{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"CVE-2024-1","groupId":"org.example","artifactId":"lib","version":"1.2.3","fixedVersion":"1.2.4","lastAffectedVersion":"1.2.3","versionWithinDelta":"","summary":"Lib is vulnerable","severity":"CRITICAL","depth":2,"CWEs":"CWE-79, 611","epss":0.42},
+{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"app","cve":"","groupId":"org.example","artifactId":"other","version":"2.0.0","fixedVersion":"","lastAffectedVersion":"2.0.0","versionWithinDelta":"","summary":"Other is vulnerable","severity":"MODERATE","depth":0,"CWEs":"","epss":null},
 {"repositoryOrigin":"github.com","repositoryPath":"o/elsewhere","repositoryBranch":"main","projectName":"x","cve":"CVE-2024-9","groupId":"org.example","artifactId":"far","version":"9.0.0","fixedVersion":"9.0.1","lastAffectedVersion":"9.0.0","versionWithinDelta":"","summary":"Far","severity":"HIGH","depth":"Direct","CWEs":"","epss":0.1}
 ]
 JSON
@@ -162,7 +162,7 @@ echo "mod $*" >> "$ARGV_LOG"
 case "$1" in
     list) cat "$MODFIX/list.json" ;;
     run-history) cat "$MODFIX/history.json" ;;
-    study) cat "$MODFIX/study.json" ;;
+    study) if [[ -f "$MODFIX/study.rc" ]]; then exit 1; fi; cat "$MODFIX/study.json" ;;
     build|run) if [[ -f "$MODFIX/$1.rc" ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi ;;
 esac
 exit 0
@@ -401,6 +401,9 @@ assert_eq "no DVC run" "no DependencyVulnerabilityCheck run for this repository;
 printf 'not json' > "$MODFIX/history.json"
 assert_eq "unparseable history" "run-history output not understood" "$(si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
 cp "$MODFIX/history_good.json" "$MODFIX/history.json"
+touch "$MODFIX/study.rc"
+assert_eq "study failure without stderr" "mod study failed: exit 1, no error output" "$(si_source_moderne "$JVMREPO" 0 | jq -r .source.reason)"
+rm -f "$MODFIX/study.rc"
 : > "$ARGV_LOG"; r=$(si_source_moderne "$JVMREPO" 0)
 assert_contains "study uses --recipe-run" "--recipe-run=20261120140200-abcde" "$(cat "$ARGV_LOG")"
 assert_not_contains "study never uses --last-recipe-run" "--last-recipe-run" "$(cat "$ARGV_LOG")"
@@ -409,6 +412,7 @@ assert_eq "status ok" ok "$(jq -r .source.status <<<"$r")"
 assert_eq "cve identifier" "CVE-2024-1" "$(jq -r '.findings[0].identifiers[0]' <<<"$r")"
 assert_eq "package colon form" "org.example:lib" "$(jq -r '.findings[0].package.name' <<<"$r")"
 assert_eq "fix version" "1.2.4" "$(jq -r '.findings[0].package.fix_version' <<<"$r")"
+assert_eq "numeric depth maps to transitive/direct" '["transitive","direct"]' "$(jq -c '[.findings[].package.depth]' <<<"$r")"
 assert_eq "MODERATE raw kept" MODERATE "$(jq -r '.findings[1].severity_raw' <<<"$r")"
 assert_eq "CWEs split into identifiers" 2 "$(jq '.findings[0].identifiers|map(select(startswith("CWE-")))|length' <<<"$r")"
 assert_eq "bare CWE digits prefixed" '["CVE-2024-1","CWE-79","CWE-611"]' "$(jq -c '.findings[0].identifiers' <<<"$r")"
