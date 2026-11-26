@@ -332,20 +332,17 @@ dep_finding()   { raw_finding "$1" "$2" dependency high source "$3" | shape_inpu
 two_deps()      { { raw_finding "$1" 1 dependency high source "$2"; raw_finding "$3" 2 dependency high source "$4"; } | shape_input; }
 
 echo "si_shape"
-# severity table
 for pair in "Critical:critical" "ERROR:high" "moderate:medium" "warning:medium" "INFO:low" "note:low" ":unknown" "weird:unknown"; do
   raw="${pair%%:*}"; want="${pair##*:}"
   got=$(one_finding github 1 code "$raw" source | si_shape | jq -r '.findings[0].severity')
   assert_eq "severity $raw -> $want" "$want" "$got"
 done
 assert_eq "policy origin forces critical" critical "$(one_finding github 2 secret 'n/a (secret)' policy | si_shape | jq -r '.findings[0].severity')"
-# keys
 assert_eq "CVE key" "CVE-2024-1" "$(dep_finding gitlab 9 CVE-2024-1 | si_shape | jq -r '.findings[0].key')"
 assert_eq "GHSA key when no CVE" "GHSA-AAAA" "$(dep_finding github 3 GHSA-AAAA | si_shape | jq -r '.findings[0].key')"
 assert_eq "mixed-case ids upper-cased and merged" 1 "$(two_deps gitlab cve-2024-1 moderne CVE-2024-1 | si_shape | jq '.findings | length')"
 assert_eq "unidentified dependency key" "pkg:org.example:lib@1.2.3" "$(dep_finding moderne 7 '' | si_shape | jq -r '.findings[0].key')"
 assert_eq "code key" "github:code:42" "$(one_finding github 42 code high source | si_shape | jq -r '.findings[0].key')"
-# merge rules
 m=$(two_deps gitlab CVE-2024-1 moderne CVE-2024-1 | si_shape)
 assert_eq "same CVE merges" 1 "$(jq '.findings|length' <<<"$m")"
 assert_eq "merged keeps both sources" 2 "$(jq '.findings[0].sources|length' <<<"$m")"
@@ -360,7 +357,6 @@ assert_eq "code findings never merge" 2 "$({ raw_finding github 1 code high sour
     raw_finding github 2 code high source js/sql-injection; } | shape_input | si_shape | jq '.findings|length')"
 assert_eq "duplicate native id collapses" 1 "$({ raw_finding github 7 dependency high source CVE-2024-1
     raw_finding github 7 dependency high source CVE-2024-1; } | shape_input | si_shape | jq '.sources[0].count')"
-# fix candidates, severity, ordering
 f=$({ FIX=1.2.4 raw_finding gitlab 1 dependency high source CVE-1; FIX=1.2.4 raw_finding moderne 2 dependency high source CVE-1; } | shape_input | si_shape)
 assert_eq "agreeing candidates set fix_version" 1.2.4 "$(fix_of <<<"$f")"
 f=$({ FIX=1.2.4 raw_finding gitlab 1 dependency high source CVE-1; FIX=1.3.0 raw_finding moderne 2 dependency high source CVE-1; } | shape_input | si_shape)
@@ -402,7 +398,6 @@ o=$({ raw_finding github 5 code "" source ""; raw_finding github 4 code low sour
 assert_eq "ordered by severity then key" "critical high medium low unknown" "$(jq -r '[.findings[].severity]|join(" ")' <<<"$o")"
 assert_eq "summary counts" '{"critical":1,"high":1,"medium":1,"low":1,"unknown":1,"merged":0}' "$(jq -c .summary <<<"$o")"
 assert_eq "package null for code" null "$(one_finding github 42 code high source | si_shape | jq -r '.findings[0].package')"
-# identifiers and containers
 i=$(raw_finding github 5 code high source 'cve-2024-9,js/sql-injection,ghsa-zzzz' | shape_input | si_shape)
 assert_eq "only CVE/GHSA upper-cased" '["CVE-2024-9","js/sql-injection","GHSA-ZZZZ"]' "$(jq -c '.findings[0].identifiers' <<<"$i")"
 assert_eq "code finding with a CVE keeps the native key" "github:code:5" "$(jq -r '.findings[0].key' <<<"$i")"
@@ -413,7 +408,6 @@ assert_eq "unidentified containers do not merge" 2 "$({ raw_finding gitlab 1 con
 assert_eq "unidentified container key" "gitlab:container:gid://gitlab/Vulnerability/8" "$(raw_finding gitlab 'gid://gitlab/Vulnerability/8' container high source '' | shape_input | si_shape | jq -r '.findings[0].key')"
 assert_eq "containers merge on CVE" 1 "$({ raw_finding gitlab 1 container high source CVE-2024-3
     raw_finding github 2 container high source CVE-2024-3; } | shape_input | si_shape | jq '.findings|length')"
-# merged package fields: gitlab member has depth null, scope null; moderne member has depth transitive, scope test
 p=$({ raw_finding gitlab 1 dependency high source CVE-2024-1
       DEPTH=transitive SCOPE=test raw_finding moderne 2 dependency high source CVE-2024-1; } | shape_input | si_shape | jq -c '.findings[0].package|{name,version,depth,scope}')
 assert_eq "merged package takes first-source name/version, first non-null depth/scope" '{"name":"org.example:lib","version":"1.2.3","depth":"transitive","scope":"test"}' "$p"

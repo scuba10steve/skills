@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# security-insights — security findings for a repository from forge, dependency and Moderne sources.
-# In library mode (sourced by the test harness) skip -e and do not dispatch.
+# security-insights — security findings for a repository from its forge and Moderne.
+# In library mode (sourced by the test harness) skip set -euo pipefail and do not dispatch.
 if [[ -z "${SECURITY_INSIGHTS_LIB:-}" ]]; then set -euo pipefail; fi
 
 si_usage() {
