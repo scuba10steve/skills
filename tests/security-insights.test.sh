@@ -43,18 +43,20 @@ JVMREPO="$TMPHOME/jvm";     mkrepo "$JVMREPO"
 git -C "$JVMREPO" remote add origin https://github.com/o/jvm.git
 GRADLEREPO="$TMPHOME/gradle"; mkrepo "$GRADLEREPO"
 : > "$GRADLEREPO/settings.gradle.kts"
-NODEREPO="$TMPHOME/node";   mkrepo "$NODEREPO";  : > "$NODEREPO/package.json"
-PYREPO="$TMPHOME/py";       mkrepo "$PYREPO";    : > "$PYREPO/requirements.txt"
-GOREPO="$TMPHOME/go";       mkrepo "$GOREPO";    : > "$GOREPO/go.mod"
-CSREPO="$TMPHOME/cs";       mkrepo "$CSREPO";    : > "$CSREPO/App.csproj"
-CSSUBREPO="$TMPHOME/cssub"; mkrepo "$CSSUBREPO"; mkdir "$CSSUBREPO/sub" "$CSSUBREPO/Dir.csproj"; : > "$CSSUBREPO/sub/Other.csproj"
-DEEPREPO="$TMPHOME/deep";   mkrepo "$DEEPREPO";  mkdir "$DEEPREPO/web"; : > "$DEEPREPO/web/package.json"
-DEEPMIX="$TMPHOME/deepmix"; mkrepo "$DEEPMIX";   mkdir "$DEEPMIX/frontend"; : > "$DEEPMIX/build.gradle"; : > "$DEEPMIX/frontend/package.json"
-NMREPO="$TMPHOME/nm";       mkrepo "$NMREPO";    mkdir -p "$NMREPO/node_modules/x"; : > "$NMREPO/node_modules/x/package.json"
-TOODEEP="$TMPHOME/toodeep"; mkrepo "$TOODEEP";   mkdir -p "$TOODEEP/a/b/c/d"; : > "$TOODEEP/a/b/c/d/package.json"
-DEPTH3="$TMPHOME/depth3";   mkrepo "$DEPTH3";    mkdir -p "$DEPTH3/a/b/c"; : > "$DEPTH3/a/b/c/package.json"
-BUILDREPO="$TMPHOME/bld";   mkrepo "$BUILDREPO"; mkdir "$BUILDREPO/build"; : > "$BUILDREPO/build/package.json"
-MIXREPO="$TMPHOME/mix";     mkrepo "$MIXREPO";   : > "$MIXREPO/build.gradle"; : > "$MIXREPO/package.json"
+# mkfile <path> -> an empty file, parent directories created
+mkfile() { mkdir -p "${1%/*}"; : > "$1"; }
+NODEREPO="$TMPHOME/node";   mkfile "$NODEREPO/package.json"
+PYREPO="$TMPHOME/py";       mkfile "$PYREPO/requirements.txt"
+GOREPO="$TMPHOME/go";       mkfile "$GOREPO/go.mod"
+CSREPO="$TMPHOME/cs";       mkfile "$CSREPO/App.csproj"
+CSSUBREPO="$TMPHOME/cssub"; mkdir -p "$CSSUBREPO/Dir.csproj"; mkfile "$CSSUBREPO/sub/Other.csproj"
+DEEPREPO="$TMPHOME/deep";   mkfile "$DEEPREPO/web/package.json"
+DEEPMIX="$TMPHOME/deepmix"; mkfile "$DEEPMIX/build.gradle"; mkfile "$DEEPMIX/frontend/package.json"
+NMREPO="$TMPHOME/nm";       mkfile "$NMREPO/node_modules/x/package.json"
+TOODEEP="$TMPHOME/toodeep"; mkfile "$TOODEEP/a/b/c/d/package.json"
+DEPTH3="$TMPHOME/depth3";   mkfile "$DEPTH3/a/b/c/package.json"
+BUILDREPO="$TMPHOME/bld";   mkfile "$BUILDREPO/build/package.json"
+MIXREPO="$TMPHOME/mix";     mkfile "$MIXREPO/build.gradle"; mkfile "$MIXREPO/package.json"
 
 GHFIX="$TMPHOME/ghfix"; mkdir "$GHFIX"; export GHFIX
 cat > "$GHFIX/dependabot.json" <<'JSON'
@@ -147,6 +149,8 @@ JSON
 cat > "$MODFIX/study_nodejs.json" <<'JSON'
 [{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","repositoryBranch":"main","projectName":"web","cve":"CVE-2024-7","packageName":"lodash","version":"4.17.20","fixedVersion":"4.17.21","summary":"Prototype pollution in lodash","severity":"HIGH","direct":false,"cwes":"CWE-1321"}]
 JSON
+jq -c '.[0] |= (del(.direct) | .depth = "3")' "$MODFIX/study_nodejs.json" > "$MODFIX/study_nodejs_depth.json"
+jq -c '.[0] |= (.version = 4 | .fixedVersion = 5)' "$MODFIX/study_nodejs.json" > "$MODFIX/study_nodejs_numeric.json"
 cat > "$MODFIX/study_bad_row.json" <<'JSON'
 [{"repositoryOrigin":"github.com","repositoryPath":"o/jvm","cve":"CVE-2024-1","groupId":"org.example","artifactId":"lib","version":"1.2.3","fixedVersion":"1.2.4","severity":"HIGH","depth":0},
  "not a row"]
@@ -163,12 +167,17 @@ mod_use() {
     local kv
     for kv in "$@"; do cp "$MODFIX/${kv#*=}" "$MODFIX/live-${kv%%=*}.json"; done
 }
-mod_use list=list_good.json history=history_good.json study=study_good.json
+mod_use list=list_good.json history=history_good.json study=study_good.json study-nodejs=study_nodejs.json
 
 ARGV_LOG="$TMPHOME/argv.log"; export ARGV_LOG
-: > "$ARGV_LOG"
+argv_reset() { : > "$ARGV_LOG"; }
+argv_reset
 argv() { cat "$ARGV_LOG"; }
 reason_of() { jq -r .source.reason; }
+status_of() { jq -r .source.status; }
+fix_of() { jq -r '.findings[0].package.fix_version'; }
+# gl_vuln <n> (gitlab source result on stdin) -> the finding for gid://gitlab/Vulnerability/<n>
+gl_vuln() { jq -c --arg id "gid://gitlab/Vulnerability/$1" '.findings[] | select(.native_id == $id)'; }
 
 STUB="$TMPHOME/stub"; mkdir "$STUB"
 cat > "$TMPHOME/forge-stub" <<'FAKE'
@@ -218,10 +227,12 @@ case "$1" in
     run-history) cat "$MODFIX/live-history.json" ;;
     study) if [[ -f "$MODFIX/study.rc" ]]; then exit 1; fi
            case "$*" in
-               *"--data-table org.openrewrite.nodejs.table.VulnerabilityReport"*) cat "$MODFIX/study_nodejs.json" ;;
+               *"--data-table org.openrewrite.nodejs.table.VulnerabilityReport"*) cat "$MODFIX/live-study-nodejs.json" ;;
                *) cat "$MODFIX/live-study.json" ;;
            esac ;;
-    build|run) if [[ -f "$MODFIX/$1.rc" || ( "$1" == run && -f "$MODFIX/run-nodejs.rc" && "$*" == *org.openrewrite.nodejs.* ) ]]; then echo "$1 exploded" >&2; echo "second line" >&2; exit 1; fi
+    build|run) if [[ -f "$MODFIX/$1.rc" ]] || [[ "$*" == *org.openrewrite.nodejs.* && -f "$MODFIX/$1-nodejs.rc" ]]; then
+                   echo "$1 exploded" >&2; echo "second line" >&2; exit 1
+               fi
                if [[ "$1" == build && -f "$MODFIX/build.writes" ]]; then cp "$MODFIX/list_good.json" "$MODFIX/live-list.json"; fi ;;
 esac
 exit 0
@@ -290,10 +301,13 @@ out=$("$BASH" "$SCRIPT" --repo "$NOREMOTE")
 assert_eq "no remote skips both forge sources" 2 "$(jq '[.sources[] | select(.reason=="no git remote")] | length' <<<"$out")"
 
 REPO_JSON=$(si_repo_json "$REPO")
-# raw_finding <source> <native_id> <kind> <severity_raw> <origin> <ids_csv> [fix_version] [depth] [scope] [package] [version]
+# raw_finding <source> <native_id> <kind> <severity_raw> <origin> <ids_csv>
+#   optional fields from the environment: FIX, VER (default 1.2.3, "null" for none), PKG (default org.example:lib),
+#   DEPTH, SCOPE, ECO
 raw_finding() {
     jq -nc --arg s "$1" --arg id "$2" --arg kind "$3" --arg sev "$4" --arg origin "$5" --arg ids "$6" \
-        --arg fix "${7:-}" --arg depth "${8:-}" --arg scope "${9:-}" --arg pname "${10:-org.example:lib}" --arg ver "${11:-1.2.3}" '
+        --arg fix "${FIX:-}" --arg depth "${DEPTH:-}" --arg scope "${SCOPE:-}" --arg pname "${PKG:-org.example:lib}" \
+        --arg ver "${VER:-1.2.3}" --arg eco "${ECO:-}" '
         def opt: if . == "" or . == "null" then null else . end;
         {source: $s, native_id: $id, kind: $kind, severity_raw: ($sev | opt), severity_origin: $origin,
          title: ("finding " + $id),
@@ -303,7 +317,8 @@ raw_finding() {
                    else null end),
          identifiers: (if $ids == "" then [] else $ids | split(",") end),
          locations: [{file: "pom.xml", line: null}],
-         url: ("https://example.com/" + $s + "/" + $id), solution: null, epss: null, as_of: null}'
+         url: ("https://example.com/" + $s + "/" + $id), solution: null, epss: null, as_of: null}
+        + if $eco == "" then {} else {ecosystem: $eco} end'
 }
 # raw findings on stdin -> si_shape input, one ok result per source
 shape_input() {
@@ -346,36 +361,36 @@ assert_eq "code findings never merge" 2 "$({ raw_finding github 1 code high sour
 assert_eq "duplicate native id collapses" 1 "$({ raw_finding github 7 dependency high source CVE-2024-1
     raw_finding github 7 dependency high source CVE-2024-1; } | shape_input | si_shape | jq '.sources[0].count')"
 # fix candidates, severity, ordering
-f=$({ raw_finding gitlab 1 dependency high source CVE-1 1.2.4; raw_finding moderne 2 dependency high source CVE-1 1.2.4; } | shape_input | si_shape)
-assert_eq "agreeing candidates set fix_version" 1.2.4 "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
-f=$({ raw_finding gitlab 1 dependency high source CVE-1 1.2.4; raw_finding moderne 2 dependency high source CVE-1 1.3.0; } | shape_input | si_shape)
-assert_eq "differing candidates pick the lowest at or above version" 1.2.4 "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
+f=$({ FIX=1.2.4 raw_finding gitlab 1 dependency high source CVE-1; FIX=1.2.4 raw_finding moderne 2 dependency high source CVE-1; } | shape_input | si_shape)
+assert_eq "agreeing candidates set fix_version" 1.2.4 "$(fix_of <<<"$f")"
+f=$({ FIX=1.2.4 raw_finding gitlab 1 dependency high source CVE-1; FIX=1.3.0 raw_finding moderne 2 dependency high source CVE-1; } | shape_input | si_shape)
+assert_eq "differing candidates pick the lowest at or above version" 1.2.4 "$(fix_of <<<"$f")"
 assert_eq "both candidates kept" 2 "$(jq '.findings[0].package.fix_candidates|length' <<<"$f")"
 # fix_pair <fix1> <fix2> <version> -> merged fix_version
 fix_pair() {
-    { raw_finding gitlab 1 dependency high source CVE-1 "$1" "" "" org.example:lib "$3"
-      raw_finding moderne 2 dependency high source CVE-1 "$2" "" "" org.example:lib "$3"; } | shape_input | si_shape
+    { FIX="$1" VER="$3" raw_finding gitlab 1 dependency high source CVE-1
+      FIX="$2" VER="$3" raw_finding moderne 2 dependency high source CVE-1; } | shape_input | si_shape
 }
 f=$(fix_pair 3.4.1 3.3.2 2.1.2)
-assert_eq "lowest candidate at or above 2.1.2" 3.3.2 "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
+assert_eq "lowest candidate at or above 2.1.2" 3.3.2 "$(fix_of <<<"$f")"
 assert_eq "3.4.1 and 3.3.2 both kept" '["3.3.2","3.4.1"]' "$(jq -c '[.findings[0].package.fix_candidates[].version]|sort' <<<"$f")"
-assert_eq "candidates below version null fix_version" null "$(fix_pair 1.16.6 "" 3.1.0 | jq -r '.findings[0].package.fix_version')"
-assert_eq "null version takes the lowest candidate" 1.5.0 "$(fix_pair 2.0.0 1.5.0 null | jq -r '.findings[0].package.fix_version')"
-assert_eq "numeric not lexical compare" 1.9.1 "$(fix_pair 1.10.0 1.9.1 1.9.0 | jq -r '.findings[0].package.fix_version')"
-f=$({ raw_finding gitlab 1 dependency high source CVE-1 2.0.0 "" "" org.example:lib null
-      raw_finding moderne 2 dependency high source CVE-1 1.5.0 "" "" org.example:lib null; } | shape_input)
+assert_eq "candidates below version null fix_version" null "$(fix_pair 1.16.6 "" 3.1.0 | fix_of)"
+assert_eq "null version takes the lowest candidate" 1.5.0 "$(fix_pair 2.0.0 1.5.0 null | fix_of)"
+assert_eq "numeric not lexical compare" 1.9.1 "$(fix_pair 1.10.0 1.9.1 1.9.0 | fix_of)"
+f=$({ FIX=2.0.0 VER=null raw_finding gitlab 1 dependency high source CVE-1
+      FIX=1.5.0 VER=null raw_finding moderne 2 dependency high source CVE-1; } | shape_input)
 rc=0; out=$(si_shape <<<"$f") || rc=$?
 assert_eq "null version shapes without error" 0 "$rc"
-assert_eq "null version with candidates -> lowest" 1.5.0 "$(jq -r '.findings[0].package.fix_version' <<<"$out")"
-assert_eq "candidate-less member beside 1.2.4" 1.2.4 "$({ raw_finding gitlab 1 dependency high source CVE-1 ""
-    raw_finding moderne 2 dependency high source CVE-1 1.2.4; } | shape_input | si_shape | jq -r '.findings[0].package.fix_version')"
+assert_eq "null version with candidates -> lowest" 1.5.0 "$(fix_of <<<"$out")"
+assert_eq "candidate-less member beside 1.2.4" 1.2.4 "$({ raw_finding gitlab 1 dependency high source CVE-1
+    FIX=1.2.4 raw_finding moderne 2 dependency high source CVE-1; } | shape_input | si_shape | fix_of)"
 assert_eq "null and numeric candidates skipped or coerced" 1.2.4 "$(jq -nr "$SI_VER_JQ"' [null, "1.2.4", {}, 1] | lowest_at_or_above("1.2.3")')"
 assert_eq "numeric candidate coerced" 2 "$(jq -nr "$SI_VER_JQ"' [null, 2] | lowest_at_or_above(1)')"
-rc=0; out=$({ raw_finding moderne 1 dependency high source CVE-1 "" | jq -c '.package.version = 1 | .package.fix_version = 2'
-    raw_finding gitlab 2 dependency high source CVE-1 1.0.5 | jq -c '.package.version = 1'; } | shape_input | si_shape) || rc=$?
+rc=0; out=$({ raw_finding moderne 1 dependency high source CVE-1 | jq -c '.package.version = 1 | .package.fix_version = 2'
+    FIX=1.0.5 raw_finding gitlab 2 dependency high source CVE-1 | jq -c '.package.version = 1'; } | shape_input | si_shape) || rc=$?
 assert_eq "numeric moderne version shapes without error" 0 "$rc"
-assert_eq "numeric version picks lowest at or above" 1.0.5 "$(jq -r '.findings[0].package.fix_version' <<<"$out")"
-assert_eq "RELEASE suffix ignored" 4.3.20.RELEASE "$(fix_pair 4.3.20.RELEASE 4.3.18.RELEASE 4.3.19.RELEASE | jq -r '.findings[0].package.fix_version')"
+assert_eq "numeric version picks lowest at or above" 1.0.5 "$(fix_of <<<"$out")"
+assert_eq "RELEASE suffix ignored" 4.3.20.RELEASE "$(fix_pair 4.3.20.RELEASE 4.3.18.RELEASE 4.3.19.RELEASE | fix_of)"
 assert_eq "android/jre tails ignored for order" "1 -1" "$(jq -nr "$SI_VER_JQ"' "\(vercmp("32.0.0-android"; "31.1-jre")) \(vercmp("2.12.0.sp3"; "2.12.1"))"')"
 assert_eq "vercmp total over null and numbers" "-1 0" "$(jq -nr "$SI_VER_JQ"' "\(vercmp(null; "0.1")) \(vercmp(2; "2.0"))"')"
 assert_eq "suffixed equal versions compare equal" 0 "$(jq -nr "$SI_VER_JQ"' vercmp("24.1.1-android"; "24.1.1-jre")')"
@@ -399,27 +414,27 @@ assert_eq "unidentified container key" "gitlab:container:gid://gitlab/Vulnerabil
 assert_eq "containers merge on CVE" 1 "$({ raw_finding gitlab 1 container high source CVE-2024-3
     raw_finding github 2 container high source CVE-2024-3; } | shape_input | si_shape | jq '.findings|length')"
 # merged package fields: gitlab member has depth null, scope null; moderne member has depth transitive, scope test
-p=$({ raw_finding gitlab 1 dependency high source CVE-2024-1 "" null null
-      raw_finding moderne 2 dependency high source CVE-2024-1 "" transitive test; } | shape_input | si_shape | jq -c '.findings[0].package|{name,version,depth,scope}')
+p=$({ raw_finding gitlab 1 dependency high source CVE-2024-1
+      DEPTH=transitive SCOPE=test raw_finding moderne 2 dependency high source CVE-2024-1; } | shape_input | si_shape | jq -c '.findings[0].package|{name,version,depth,scope}')
 assert_eq "merged package takes first-source name/version, first non-null depth/scope" '{"name":"org.example:lib","version":"1.2.3","depth":"transitive","scope":"test"}' "$p"
-c=$({ raw_finding moderne 1 dependency high source CVE-2024-5 1.2.4 "" "" org.ex:lib 1.2.3
-      raw_finding moderne 2 dependency high source CVE-2024-5 2.0.1 "" "" org.ex:lib-core 2.0.0
-      raw_finding github 3 dependency high source CVE-2024-5 "" "" "" org.ex:lib null; } | shape_input | si_shape)
+c=$({ FIX=1.2.4 PKG=org.ex:lib raw_finding moderne 1 dependency high source CVE-2024-5
+      FIX=2.0.1 PKG=org.ex:lib-core VER=2.0.0 raw_finding moderne 2 dependency high source CVE-2024-5
+      PKG=org.ex:lib VER=null raw_finding github 3 dependency high source CVE-2024-5; } | shape_input | si_shape)
 assert_eq "multi-artifact CVE is one finding" 1 "$(jq '.findings|length' <<<"$c")"
 assert_eq "multi-artifact package is the first member's" org.ex:lib "$(jq -r '.findings[0].package.name' <<<"$c")"
-assert_eq "fix_version only from same-package candidates" 1.2.4 "$(jq -r '.findings[0].package.fix_version' <<<"$c")"
+assert_eq "fix_version only from same-package candidates" 1.2.4 "$(fix_of <<<"$c")"
 assert_eq "other artifact's candidate kept with its package" true "$(jq '.findings[0].package.fix_candidates|any(.package=="org.ex:lib-core" and .version=="2.0.1")' <<<"$c")"
 assert_eq "sources carry each member's package" '["org.ex:lib","org.ex:lib-core"]' "$(jq -c '[.findings[0].sources[].package.name]|unique' <<<"$c")"
 assert_eq "source package carries version and fix" '{"name":"org.ex:lib-core","version":"2.0.0","fix_version":"2.0.1"}' "$(jq -c '.findings[0].sources[]|select(.id=="2").package' <<<"$c")"
 assert_eq "code source package is null" null "$(one_finding github 42 code high source | si_shape | jq -c '.findings[0].sources[0].package')"
-v=$({ raw_finding github 1 dependency high source CVE-2024-6 "" "" "" org.example:lib null
-      raw_finding moderne 2 dependency high source CVE-2024-6 1.2.4 "" "" org.example:lib 1.2.3; } | shape_input | si_shape)
+v=$({ VER=null raw_finding github 1 dependency high source CVE-2024-6
+      FIX=1.2.4 raw_finding moderne 2 dependency high source CVE-2024-6; } | shape_input | si_shape)
 assert_eq "merged version is first non-null same-package version" 1.2.3 "$(jq -r '.findings[0].package.version' <<<"$v")"
 rc=0; n=$(one_finding github 1 code high source | jq -c '.results[0].findings = null' | si_shape) || rc=$?
 assert_eq "null findings still shapes" "0 0" "$rc $(jq '.findings|length' <<<"$n")"
 rc=0; n=$(dep_finding github 1 CVE-2024-1 | jq -c '.results[0].findings[0].identifiers = [null, "CVE-2024-1"] | .results[0].findings[0].locations = null' | si_shape) || rc=$?
 assert_eq "null identifier and locations still shape" '0 ["CVE-2024-1"] []' "$rc $(jq -c '.findings[0].identifiers' <<<"$n") $(jq -c '.findings[0].locations' <<<"$n")"
-e=$({ raw_finding moderne 1 dependency high source CVE-2024-8 | jq -c '.ecosystem = "nodejs"'
+e=$({ ECO=nodejs raw_finding moderne 1 dependency high source CVE-2024-8
       raw_finding github 2 dependency high source CVE-2024-8; } | shape_input | si_shape)
 assert_eq "moderne ecosystem lands on its source entry" nodejs "$(jq -r '.findings[0].sources[]|select(.name=="moderne").ecosystem' <<<"$e")"
 assert_eq "github source entry has no ecosystem" false "$(jq '.findings[0].sources[]|select(.name=="github")|has("ecosystem")' <<<"$e")"
@@ -431,7 +446,7 @@ assert_eq "result without a source object replaced" "skipped unknown result malf
 echo "si_source_github"
 export KNOWN_GH=github.com
 r=$(si_source_github github.com o/r)
-assert_eq "all reads ok -> ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "all reads ok -> ok" ok "$(status_of <<<"$r")"
 d=$(jq -c '.findings[]|select(.native_id=="dependabot:1")' <<<"$r")
 assert_eq "dependabot severity raw" high "$(jq -r .severity_raw <<<"$d")"
 assert_eq "dependabot scope" development "$(jq -r .package.scope <<<"$d")"
@@ -451,7 +466,7 @@ assert_eq "same alert number across endpoints keeps both findings" "code depende
 mv "$GHFIX/code-scanning.orig" "$GHFIX/code-scanning.json"
 echo 1 > "$GHFIX/code-scanning.rc"; echo "Code scanning is not enabled for this repository" > "$GHFIX/code-scanning.msg"
 r=$(si_source_github github.com o/r)
-assert_eq "one read 403 -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "one read 403 -> partial" partial "$(status_of <<<"$r")"
 assert_eq "failed read named" 'HTTP 403: Code scanning is not enabled for this repository' "$(jq -r '.source.reads[]|select(.name=="code-scanning").reason' <<<"$r")"
 printf '[]' > "$GHFIX/dependabot.json"; : > "$GHFIX/code-scanning.rc"
 r=$(si_source_github github.com o/r)
@@ -459,7 +474,7 @@ assert_eq "empty array read is ok" ok "$(jq -r '.source.reads[]|select(.name=="d
 cp "$GHFIX/secret-scanning.json" "$GHFIX/secret-scanning.good"; printf '[1]' > "$GHFIX/secret-scanning.json"
 r=$(si_source_github github.com o/r)
 assert_contains "unmappable read is skipped as not understood" "github output not understood: " "$(jq -r '.source.reads[]|select(.name=="secret-scanning").reason' <<<"$r")"
-assert_eq "unmappable read leaves source partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "unmappable read leaves source partial" partial "$(status_of <<<"$r")"
 cp "$GHFIX/secret-scanning.good" "$GHFIX/secret-scanning.json"
 jq -n '[range(300) | {number: ., html_url: "https://github.com/o/r/security/dependabot/\(.)",
     security_advisory: {severity: "high", summary: "advisory \(.)", cve_id: "CVE-2024-\(.)", ghsa_id: "GHSA-\(.)",
@@ -467,14 +482,14 @@ jq -n '[range(300) | {number: ., html_url: "https://github.com/o/r/security/depe
     dependency: {package: {name: "org.example:lib\(.)"}, manifest_path: "pom.xml", scope: "runtime"},
     security_vulnerability: {vulnerable_version_range: "= 1.0.0", first_patched_version: {identifier: "1.0.1"}}}]' > "$GHFIX/dependabot.json"
 r=$(si_source_github github.com o/r 2>&1)
-assert_eq "300 alerts -> ok" ok "$(jq -r .source.status <<<"$r" 2>/dev/null)"
+assert_eq "300 alerts -> ok" ok "$(status_of <<<"$r" 2>/dev/null)"
 assert_eq "300 alerts -> 300 dependabot findings" 300 "$(jq '[.findings[]|select(.kind=="dependency")]|length' <<<"$r" 2>/dev/null)"
 printf '[]' > "$GHFIX/dependabot.json"
 out=$(SECURITY_INSIGHTS_LIB= KNOWN_GH=github.com "$BASH" "$SCRIPT" --repo "$REPO")
 assert_eq "collect includes github source" 1 "$(jq '[.sources[]|select(.name=="github" and .status=="ok")]|length' <<<"$out")"
 for e in dependabot code-scanning secret-scanning; do echo 1 > "$GHFIX/$e.rc"; done
 r=$(si_source_github github.com o/r)
-assert_eq "all reads fail -> skipped" skipped "$(jq -r .source.status <<<"$r")"
+assert_eq "all reads fail -> skipped" skipped "$(status_of <<<"$r")"
 assert_eq "all-reads reason names each read" "dependabot: HTTP 403: failed; code-scanning: HTTP 403: Code scanning is not enabled for this repository; secret-scanning: HTTP 403: failed" "$(reason_of <<<"$r")"
 : > "$GHFIX/dependabot.silent"
 assert_eq "silent failure reason" "HTTP ?: exit 1, no error output" "$(si_source_github github.com o/r | jq -r '.source.reads[]|select(.name=="dependabot").reason')"
@@ -485,15 +500,15 @@ assert_eq "gh unauthenticated -> skipped" "gh auth status --hostname github.com 
 echo "si_source_gitlab"
 gl_pages good_page1.json good_page2.json
 export KNOWN_GL=gitlab.example.com
-: > "$ARGV_LOG"
+argv_reset
 r=$(si_source_gitlab gitlab.example.com group/sub/repo)
 assert_eq "two pages read" 2 "$(grep -c 'api graphql' "$ARGV_LOG")"
 assert_contains "graphql call carries --hostname" "glab api graphql --hostname gitlab.example.com" "$(argv)"
 assert_contains "graphql call passes fullPath" "fullPath=group/sub/repo" "$(argv)"
 assert_contains "page 2 passes the cursor" "after=c1" "$(argv)"
-assert_eq "status ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "status ok" ok "$(status_of <<<"$r")"
 assert_eq "three findings across pages" 3 "$(jq '.findings|length' <<<"$r")"
-v1=$(jq -c '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/1")' <<<"$r")
+v1=$(gl_vuln 1 <<<"$r")
 assert_eq "dependency kind from reportType" dependency "$(jq -r .kind <<<"$v1")"
 assert_eq "package name colon form" "org.example:lib" "$(jq -r .package.name <<<"$v1")"
 assert_eq "package version" 1.2.3 "$(jq -r .package.version <<<"$v1")"
@@ -516,10 +531,10 @@ assert_eq "null version with three release lines takes the first" 1.16.6 "$(gl_f
 assert_eq "RELEASE version in solution" 5.3.31.RELEASE "$(gl_fix "Upgrade to versions 4.3.30.RELEASE, 5.3.31.RELEASE or above" 5.3.2.RELEASE)"
 assert_eq "identifiers keep only cve/ghsa/cwe" '["CVE-2024-1"]' "$(jq -c .identifiers <<<"$v1")"
 assert_eq "bare cwe id gains CWE- prefix" '["CWE-89"]' "$(shape_result <<<"$r" | jq -c '.findings[]|select(.key=="gitlab:code:gid://gitlab/Vulnerability/2").identifiers')"
-assert_eq "INFO severity raw kept" Info "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").severity_raw' <<<"$r")"
+assert_eq "INFO severity raw kept" Info "$(gl_vuln 2 <<<"$r" | jq -r .severity_raw)"
 assert_eq "sast location" 'src/B.java:40' "$(jq -r '.findings[]|select(.kind=="code").locations[0]|"\(.file):\(.line)"' <<<"$r")"
 assert_eq "code package null" null "$(jq -c '.findings[]|select(.kind=="code").package' <<<"$r")"
-assert_eq "secret kind" secret "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/3").kind' <<<"$r")"
+assert_eq "secret kind" secret "$(gl_vuln 3 <<<"$r" | jq -r .kind)"
 assert_eq "empty identifiers is an array" '[]' "$(jq -c '.findings[]|select(.kind=="secret").identifiers' <<<"$r")"
 assert_eq "scope null" null "$(jq -r '.findings[0].package.scope' <<<"$r")"
 assert_eq "no reads for gitlab" null "$(jq -c '.source.reads' <<<"$r")"
@@ -531,12 +546,12 @@ gl_pages null_vulns.json
 assert_eq "null vulnerabilities reason" "vulnerability report unavailable on g/r (requires GitLab Ultimate)" "$(si_source_gitlab gitlab.example.com g/r | reason_of)"
 gl_pages good_page1.json errors.json
 r=$(si_source_gitlab gitlab.example.com g/r)
-assert_eq "page 2 failure -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "page 2 failure -> partial" partial "$(status_of <<<"$r")"
 assert_contains "partial reason names page" "page 2 failed:" "$(reason_of <<<"$r")"
 assert_eq "page 1 findings kept" 2 "$(jq '.findings|length' <<<"$r")"
 gl_pages null_nodes.json
 r=$(si_source_gitlab gitlab.example.com g/r)
-assert_eq "null nodes -> skipped, not ok" skipped "$(jq -r .source.status <<<"$r")"
+assert_eq "null nodes -> skipped, not ok" skipped "$(status_of <<<"$r")"
 assert_contains "null nodes reason" "gitlab output not understood: " "$(reason_of <<<"$r")"
 gl_pages good_page1.json null_nodes.json
 r=$(si_source_gitlab gitlab.example.com g/r)
@@ -545,32 +560,37 @@ assert_eq "glab absent -> skipped" "glab not installed" "$(PATH="$NOGLAB" si_sou
 assert_eq "glab unauthenticated -> skipped" "glab auth status --hostname gitlab.example.com failed: not logged in" "$(KNOWN_GL= si_source_gitlab gitlab.example.com g/r | reason_of)"
 
 echo "si_source_moderne"
-assert_eq "python recipe" org.openrewrite.python.dependencies.DependencyVulnerabilityCheck "$(si_mod_recipe python)"
-assert_eq "golang recipe" org.openrewrite.golang.dependencies.DependencyVulnerabilityCheck "$(si_mod_recipe golang)"
-assert_eq "csharp recipe" org.openrewrite.csharp.dependencies.DependencyVulnerabilityCheck "$(si_mod_recipe csharp)"
-assert_eq "python table" org.openrewrite.python.dependencies.table.VulnerabilityReport "$(si_mod_table python)"
-assert_eq "golang table" org.openrewrite.golang.dependencies.table.VulnerabilityReport "$(si_mod_table golang)"
-assert_eq "csharp table" org.openrewrite.csharp.dependencies.table.VulnerabilityReport "$(si_mod_table csharp)"
-assert_eq "no manifest" "no supported dependency manifest; DependencyVulnerabilityCheck covers Maven/Gradle, npm, Python, Go and NuGet" "$(si_source_moderne "$REPO" 0 | reason_of)"
-assert_eq "java detected" java "$(si_mod_ecosystems "$JVMREPO")"
-assert_eq "gradle settings detected" java "$(si_mod_ecosystems "$GRADLEREPO")"
-assert_eq "nodejs detected" nodejs "$(si_mod_ecosystems "$NODEREPO")"
-assert_eq "python detected" python "$(si_mod_ecosystems "$PYREPO")"
-assert_eq "golang detected" golang "$(si_mod_ecosystems "$GOREPO")"
-assert_eq "csharp detected by csproj glob" csharp "$(si_mod_ecosystems "$CSREPO")"
-assert_eq "csproj one level down is detected, a csproj directory is not" csharp "$(si_mod_ecosystems "$CSSUBREPO")"
-assert_eq "package.json one level down is detected" nodejs "$(si_mod_ecosystems "$DEEPREPO")"
-assert_eq "root gradle plus nested package.json" $'java\nnodejs' "$(si_mod_ecosystems "$DEEPMIX")"
-assert_eq "node_modules is skipped" "" "$(si_mod_ecosystems "$NMREPO")"
-assert_eq "four levels down is not searched" "" "$(si_mod_ecosystems "$TOODEEP")"
-assert_eq "package.json three levels down is detected" nodejs "$(si_mod_ecosystems "$DEPTH3")"
-assert_eq "build directory is skipped" "" "$(si_mod_ecosystems "$BUILDREPO")"
-assert_eq "two ecosystems in order" $'java\nnodejs' "$(si_mod_ecosystems "$MIXREPO")"
+for eco in python golang csharp; do
+    assert_eq "$eco recipe" "org.openrewrite.$eco.dependencies.DependencyVulnerabilityCheck" "$(si_mod_recipe "$eco")"
+    assert_eq "$eco table" "org.openrewrite.$eco.dependencies.table.VulnerabilityReport" "$(si_mod_table "$eco")"
+done
+r=$(si_source_moderne "$REPO" 0)
+assert_eq "no manifest" "no supported dependency manifest; DependencyVulnerabilityCheck covers Maven/Gradle, npm, Python, Go and NuGet" "$(reason_of <<<"$r")"
+assert_eq "no manifest lists no ecosystems" '[]' "$(jq -c .source.ecosystems <<<"$r")"
+# label:expected ecosystems, space-separated:dir
+while IFS=: read -r label want dir; do
+    assert_eq "$label" "${want// /$'\n'}" "$(si_mod_ecosystems "$dir")"
+done <<TABLE
+java detected:java:$JVMREPO
+gradle settings detected:java:$GRADLEREPO
+nodejs detected:nodejs:$NODEREPO
+python detected:python:$PYREPO
+golang detected:golang:$GOREPO
+csharp detected by csproj glob:csharp:$CSREPO
+csproj one level down is detected, a csproj directory is not:csharp:$CSSUBREPO
+package.json one level down is detected:nodejs:$DEEPREPO
+root gradle plus nested package.json:java nodejs:$DEEPMIX
+node_modules is skipped::$NMREPO
+four levels down is not searched::$TOODEEP
+package.json three levels down is detected:nodejs:$DEPTH3
+build directory is skipped::$BUILDREPO
+two ecosystems in order:java nodejs:$MIXREPO
+TABLE
 assert_eq "mod absent" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$JVMREPO" 0 | reason_of)"
 assert_eq "mod probed before ecosystem detection" "mod not installed" "$(PATH="$NOMOD" si_source_moderne "$REPO" 0 | reason_of)"
 mod_use list=list_empty.json
-assert_eq "no LST" "no Moderne LST for this repository; run: mod build . (detected: java)" "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
-assert_eq "no LST lists detected ecosystems in order" "no Moderne LST for this repository; run: mod build . (detected: java, nodejs)" "$(si_source_moderne "$MIXREPO" 0 | reason_of)"
+assert_eq "no LST" "no Moderne LST for this repository; run: mod build ." "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
+assert_eq "no LST lists detected ecosystems in order" '["java","nodejs"]' "$(si_source_moderne "$MIXREPO" 0 | jq -c .source.ecosystems)"
 assert_eq "no java run names the ecosystem" "no java DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck" "$(mod_use list=list_good.json history=history_other_recipe.json; si_source_moderne "$JVMREPO" 0 | reason_of)"
 mod_use history=history_bad.txt
 assert_eq "unparseable history" "run-history output not understood" "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
@@ -578,14 +598,14 @@ mod_use history=history_good.json
 touch "$MODFIX/study.rc"
 assert_eq "study failure without stderr" "mod study failed: exit 1, no error output" "$(si_source_moderne "$JVMREPO" 0 | reason_of)"
 rm -f "$MODFIX/study.rc"
-: > "$ARGV_LOG"; r=$(si_source_moderne "$JVMREPO" 0)
+argv_reset; r=$(si_source_moderne "$JVMREPO" 0)
 assert_contains "study uses --recipe-run" "--recipe-run=20261120140200-abcde" "$(argv)"
 assert_not_contains "study never uses --last-recipe-run" "--last-recipe-run" "$(argv)"
 assert_not_contains "no build without flag" "mod build" "$(argv)"
-assert_eq "status ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "status ok" ok "$(status_of <<<"$r")"
 assert_eq "cve identifier" "CVE-2024-1" "$(jq -r '.findings[0].identifiers[0]' <<<"$r")"
 assert_eq "package colon form" "org.example:lib" "$(jq -r '.findings[0].package.name' <<<"$r")"
-assert_eq "fix version" "1.2.4" "$(jq -r '.findings[0].package.fix_version' <<<"$r")"
+assert_eq "fix version" "1.2.4" "$(fix_of <<<"$r")"
 assert_eq "numeric depth maps to transitive/direct" '["transitive","direct"]' "$(jq -c '[.findings[].package.depth]' <<<"$r")"
 assert_eq "MODERATE raw kept" MODERATE "$(jq -r '.findings[1].severity_raw' <<<"$r")"
 ids=$(shape_result <<<"$r" | jq -c '.findings[]|select(.key=="CVE-2024-1").identifiers')
@@ -606,43 +626,41 @@ mod_use history=history_noscope.json
 assert_eq "scope null when run has none" null "$(si_source_moderne "$JVMREPO" 0 | jq -r '.findings[0].package.scope')"
 mod_use history=history_good.json
 mod_steps() { grep -oE 'mod (build|run) ' "$ARGV_LOG" | sed 's/ $//' | paste -sd'|' -; }
-: > "$ARGV_LOG"; si_source_moderne "$JVMREPO" 1 >/dev/null
+argv_reset; si_source_moderne "$JVMREPO" 1 >/dev/null
 assert_eq "--moderne-run builds then runs" "mod build|mod run" "$(mod_steps)"
 : > "$MODFIX/build.rc"
 assert_eq "build failure skips" "mod build failed: build exploded" "$(si_source_moderne "$JVMREPO" 1 2>/dev/null | reason_of)"
 rm -f "$MODFIX/build.rc"; : > "$MODFIX/run.rc"
 assert_eq "run failure skips" "mod run failed: run exploded" "$(si_source_moderne "$JVMREPO" 1 2>/dev/null | reason_of)"
 rm -f "$MODFIX/run.rc"
-assert_eq "settings.gradle.kts detected as java and read" ok "$(si_source_moderne "$GRADLEREPO" 0 | jq -r .source.status)"
+assert_eq "settings.gradle.kts detected as java and read" ok "$(si_source_moderne "$GRADLEREPO" 0 | status_of)"
 mod_use study=study_bad_row.json
 r=$(si_source_moderne "$JVMREPO" 0)
-assert_eq "non-object row -> skipped" skipped "$(jq -r .source.status <<<"$r")"
+assert_eq "non-object row -> skipped" skipped "$(status_of <<<"$r")"
 assert_contains "non-object row reason" "moderne output not understood: " "$(reason_of <<<"$r")"
 mod_use study=study_good.json list=list_empty.json
-: > "$MODFIX/build.writes"; : > "$ARGV_LOG"
+: > "$MODFIX/build.writes"; argv_reset
 r=$(si_source_moderne "$JVMREPO" 1 2>/dev/null)
-assert_eq "--moderne-run recovers from no LST" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "--moderne-run recovers from no LST" ok "$(status_of <<<"$r")"
 assert_eq "no-LST recovery builds once then runs" "mod build|mod run" "$(mod_steps)"
 rm -f "$MODFIX/build.writes"; mod_use list=list_good.json
-mod_use history=history_nodejs.json study=study_nodejs.json
-: > "$ARGV_LOG"; r=$(si_source_moderne "$NODEREPO" 0)
-assert_eq "nodejs read ok" ok "$(jq -r .source.status <<<"$r")"
+mod_use history=history_nodejs.json
+argv_reset; r=$(si_source_moderne "$NODEREPO" 0)
+assert_eq "nodejs read ok" ok "$(status_of <<<"$r")"
 assert_eq "nodejs recipe used in study" 1 "$(grep -c -- "--data-table org.openrewrite.nodejs.table.VulnerabilityReport" "$ARGV_LOG")"
 assert_eq "packageName mapped" lodash "$(jq -r '.findings[0].package.name' <<<"$r")"
 assert_eq "direct:false maps to transitive" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
 assert_eq "lower-case cwes split" '["CVE-2024-7","CWE-1321"]' "$(jq -c '.findings[0].identifiers' <<<"$r")"
 assert_eq "ecosystem on finding" nodejs "$(jq -r '.findings[0].ecosystem' <<<"$r")"
 assert_eq "nodejs read named by ecosystem" '[{"name":"nodejs","status":"ok"}]' "$(jq -c .source.reads <<<"$r")"
-mod_use history=history_nodejs.json
-cp "$MODFIX/study_nodejs.json" "$MODFIX/study_nodejs.orig"
-sed 's/"direct":false/"depth":"3"/' "$MODFIX/study_nodejs.orig" > "$MODFIX/study_nodejs.json"
-r=$(si_source_moderne "$NODEREPO" 0)
-mv "$MODFIX/study_nodejs.orig" "$MODFIX/study_nodejs.json"
-assert_eq "numeric-string depth maps to transitive" transitive "$(jq -r '.findings[0].package.depth' <<<"$r")"
-mod_use history=history_java_and_nodejs.json study=study_good.json
-: > "$ARGV_LOG"; r=$(si_source_moderne "$MIXREPO" 0)
+mod_use study-nodejs=study_nodejs_depth.json
+assert_eq "numeric-string depth maps to transitive" transitive "$(si_source_moderne "$NODEREPO" 0 | jq -r '.findings[0].package.depth')"
+mod_use study-nodejs=study_nodejs_numeric.json
+assert_eq "numeric versions arrive as strings" '["4","5"]' "$(si_source_moderne "$NODEREPO" 0 | jq -c '.findings[0].package | [.version, .fix_version]')"
+mod_use study-nodejs=study_nodejs.json history=history_java_and_nodejs.json
+argv_reset; r=$(si_source_moderne "$MIXREPO" 0)
 assert_eq "two reads" 2 "$(jq '.source.reads|length' <<<"$r")"
-assert_eq "both ok" ok "$(jq -r .source.status <<<"$r")"
+assert_eq "both ok" ok "$(status_of <<<"$r")"
 assert_eq "findings from both tables" 3 "$(jq '.findings|length' <<<"$r")"
 assert_eq "run-history read once" 1 "$(grep -c '^mod run-history' "$ARGV_LOG")"
 assert_contains "latest run per recipe" "--recipe-run=20261121100000-nodej --data-table org.openrewrite.nodejs.table.VulnerabilityReport" "$(argv)"
@@ -651,20 +669,20 @@ assert_eq "rows from two tables survive shaping" 3 "$(shape_result <<<"$r" | jq 
 assert_eq "row 0 of each table has its own id" '["VulnerabilityReport:java:row:0","VulnerabilityReport:nodejs:row:0"]' "$(jq -c '[.findings[].native_id|select(endswith(":row:0"))]' <<<"$r")"
 mod_use history=history_good.json
 r=$(si_source_moderne "$MIXREPO" 0)
-assert_eq "one missing run -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "one missing run -> partial" partial "$(status_of <<<"$r")"
 assert_eq "missing read named" "no nodejs DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.nodejs.security.DependencyVulnerabilityCheck" "$(jq -r '.source.reads[]|select(.name=="nodejs").reason' <<<"$r")"
 assert_eq "partial keeps the read ecosystem's findings" 2 "$(jq '.findings|length' <<<"$r")"
 mod_use history=history_other_recipe.json
 assert_eq "no run in any ecosystem names each" "java: no java DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.java.dependencies.DependencyVulnerabilityCheck; nodejs: no nodejs DependencyVulnerabilityCheck run for this repository; run: mod run . --recipe org.openrewrite.nodejs.security.DependencyVulnerabilityCheck" "$(si_source_moderne "$MIXREPO" 0 | reason_of)"
 mod_use history=history_good.json
-: > "$ARGV_LOG"; si_source_moderne "$MIXREPO" 1 >/dev/null
+argv_reset; si_source_moderne "$MIXREPO" 1 >/dev/null
 assert_eq "one build then two runs" "mod build|mod run|mod run" "$(mod_steps)"
 assert_eq "runs name both recipes" 2 "$(grep -c -E -- '--recipe org.openrewrite.(java.dependencies|nodejs.security).DependencyVulnerabilityCheck' "$ARGV_LOG")"
 assert_eq "runs in detection order" "java nodejs" "$(grep -oE -- '^mod run .* --recipe org.openrewrite.(java|nodejs)' "$ARGV_LOG" | sed -E 's/.*org.openrewrite.//' | paste -sd' ' -)"
 mod_use history=history_java_and_nodejs.json; : > "$MODFIX/run-nodejs.rc"
 r=$(si_source_moderne "$MIXREPO" 1 2>/dev/null)
 rm -f "$MODFIX/run-nodejs.rc"; mod_use history=history_good.json
-assert_eq "one failed run -> partial" partial "$(jq -r .source.status <<<"$r")"
+assert_eq "one failed run -> partial" partial "$(status_of <<<"$r")"
 assert_eq "failed run keeps the other ecosystem's findings" '["java","java"]' "$(jq -c '[.findings[].ecosystem]' <<<"$r")"
 assert_contains "failed run named on its read" "mod run failed: run exploded" "$(jq -r '.source.reads[]|select(.name=="nodejs").reason' <<<"$r")"
 out=$(SECURITY_INSIGHTS_LIB= "$BASH" "$SCRIPT" --repo "$JVMREPO" 2>/dev/null)

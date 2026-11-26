@@ -31,7 +31,7 @@ Open vulnerability findings for the current repository from its forge and Modern
 
 3. **Moderne gate.** Applies when the moderne source, or any ecosystem read within it, is skipped for want of a run or an LST (a reason containing `no <ecosystem> DependencyVulnerabilityCheck run` or starting `no Moderne LST`), `mod` is installed, and at least one ecosystem was detected. It does not apply to `mod not installed` or `no supported dependency manifest`. By `deep_budget`:
    - `allow`: re-run the script with `--moderne-run` once; never a second time in the same session, whatever the result.
-   - `ask`: say what it costs (one Moderne LST build plus one recipe run per detected ecosystem; minutes) and ask. When the reason starts `no Moderne LST`, the detected ecosystems are listed at its end (`(detected: java, nodejs)`); count them for the run total.
+   - `ask`: say what it costs (one Moderne LST build plus one recipe run per detected ecosystem; minutes) and ask; count the moderne source's `ecosystems` list for the run total.
    - `deny`: say the run is available on request.
    - An explicit "include Moderne" or "run the recipe" in the user's request beats `deny`.
    - Offer the run only on repositories the user's Moderne license covers; public repositories need no license.
