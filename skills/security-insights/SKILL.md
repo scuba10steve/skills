@@ -98,5 +98,3 @@ Open vulnerability findings for the current repository from its forge and Modern
 | python | `org.openrewrite.python.dependencies.DependencyVulnerabilityCheck` |
 | golang | `org.openrewrite.golang.dependencies.DependencyVulnerabilityCheck` |
 | csharp | `org.openrewrite.csharp.dependencies.DependencyVulnerabilityCheck` |
-
-Verified against `gh 2.104.0`, `glab 1.130.0`, `Moderne CLI 4.13.0`.
