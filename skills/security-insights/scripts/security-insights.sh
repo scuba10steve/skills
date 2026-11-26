@@ -161,7 +161,21 @@ si_read() {
         '{name: $n} + if $r == "" then {status: "ok"} else {status: "skipped", reason: $r} end'
 }
 
-SI_SHAPE_JQ='
+# Dotted numeric version order shared by the merge and the GitLab mapper: segments compare
+# numerically, a missing segment is 0, and a non-numeric tail such as -beta is ignored.
+SI_VER_JQ='
+def verkey($width): [splits("\\.") | (capture("^(?<n>[0-9]+)").n // "0") | tonumber]
+  | . + [range($width - length) | 0];
+def vercmp($a; $b):
+  ([$a, $b] | map(split(".") | length) | max) as $w
+  | ($a | verkey($w)) as $x | ($b | verkey($w)) as $y
+  | if $x < $y then -1 elif $x > $y then 1 else 0 end;
+def lowest_at_or_above($v):
+  map(select($v == null or vercmp(.; $v) >= 0))
+  | reduce .[] as $c (null; if . == null or vercmp($c; .) < 0 then $c else . end);
+'
+
+SI_SHAPE_JQ=$SI_VER_JQ'
 def sev_rank: {critical: 0, high: 1, medium: 2, low: 3, unknown: 4}[.];
 def source_rank: {gitlab: 0, github: 1, moderne: 2}[.] // 3;
 def norm_sev:
@@ -221,7 +235,7 @@ def merge:
      package: (if $first.package == null then null else
        {name: $pname,
         version: first_of($same; .package.version),
-        fix_version: (if ($own_fixes | length) == 1 then $own_fixes[0] else null end),
+        fix_version: ($own_fixes | lowest_at_or_above(first_of($same; .package.version))),
         fix_candidates: ($fixes | unique),
         depth: first_of($same; .package.depth),
         scope: first_of($same; .package.scope)} end),
@@ -326,11 +340,13 @@ SI_GITLAB_QUERY='query($fullPath: ID!, $after: String) {
   }
 }'
 
-SI_GL_MAP='
+SI_GL_MAP=$SI_VER_JQ'
 def kind: {"DEPENDENCY_SCANNING": "dependency", "SAST": "code", "SECRET_DETECTION": "secret",
            "CONTAINER_SCANNING": "container"}[.reportType] // "unknown";
 def colon: if (test("@") | not) and (split("/") | length) == 2 then sub("/"; ":") else . end;
-def fix: (.solution // "") | capture("(?s)[Uu]pgrade.*?(?<v>[0-9]+(\\.[0-9]+)+)").v? // null;
+def fix($v):
+  [(.solution // "") | capture("(?is)upgrade(?<rest>.*)").rest | scan("[0-9]+(?:\\.[0-9]+)+")]
+  | if $v == null then .[0] else lowest_at_or_above($v) end;
 def loc($k):
   if $k == "container" then (if .image != null then [{file: .image, line: null}] else [] end)
   elif .file != null then [{file, line: (.startLine // null)}] else [] end;
@@ -339,7 +355,7 @@ def loc($k):
     severity_raw: .severity, severity_origin: "source", title: .title,
     package: (if $k == "dependency" or $k == "container"
               then {name: ($l.dependency.package.name | if . == null then null else colon end),
-                    version: ($l.dependency.version // null), fix_version: fix, depth: null, scope: null}
+                    version: ($l.dependency.version // null), fix_version: fix($l.dependency.version), depth: null, scope: null}
               else null end),
     identifiers: [(.identifiers // [])[] | ((.externalType // "") | ascii_downcase) as $t
                   | select($t | IN("cve", "ghsa", "cwe")) | .externalId

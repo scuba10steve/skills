@@ -349,8 +349,19 @@ assert_eq "duplicate native id collapses" 1 "$({ raw_finding github 7 dependency
 f=$({ raw_finding gitlab 1 dependency high source CVE-1 1.2.4; raw_finding moderne 2 dependency high source CVE-1 1.2.4; } | shape_input | si_shape)
 assert_eq "agreeing candidates set fix_version" 1.2.4 "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
 f=$({ raw_finding gitlab 1 dependency high source CVE-1 1.2.4; raw_finding moderne 2 dependency high source CVE-1 1.3.0; } | shape_input | si_shape)
-assert_eq "disagreeing candidates null fix_version" null "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
+assert_eq "differing candidates pick the lowest at or above version" 1.2.4 "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
 assert_eq "both candidates kept" 2 "$(jq '.findings[0].package.fix_candidates|length' <<<"$f")"
+# fix_pair <fix1> <fix2> <version> -> merged fix_version
+fix_pair() {
+    { raw_finding gitlab 1 dependency high source CVE-1 "$1" "" "" org.example:lib "$3"
+      raw_finding moderne 2 dependency high source CVE-1 "$2" "" "" org.example:lib "$3"; } | shape_input | si_shape
+}
+f=$(fix_pair 3.4.1 3.3.2 2.1.2)
+assert_eq "lowest candidate at or above 2.1.2" 3.3.2 "$(jq -r '.findings[0].package.fix_version' <<<"$f")"
+assert_eq "3.4.1 and 3.3.2 both kept" '["3.3.2","3.4.1"]' "$(jq -c '[.findings[0].package.fix_candidates[].version]|sort' <<<"$f")"
+assert_eq "candidates below version null fix_version" null "$(fix_pair 1.16.6 "" 3.1.0 | jq -r '.findings[0].package.fix_version')"
+assert_eq "null version takes the lowest candidate" 1.5.0 "$(fix_pair 2.0.0 1.5.0 null | jq -r '.findings[0].package.fix_version')"
+assert_eq "numeric not lexical compare" 1.9.1 "$(fix_pair 1.10.0 1.9.1 1.9.0 | jq -r '.findings[0].package.fix_version')"
 assert_eq "highest severity wins" critical "$({ raw_finding gitlab 1 dependency low source CVE-2024-1
     raw_finding moderne 2 dependency critical source CVE-2024-1; } | shape_input | si_shape | jq -r '.findings[0].severity')"
 o=$({ raw_finding github 5 code "" source ""; raw_finding github 4 code low source ""
@@ -470,6 +481,20 @@ assert_eq "dependency kind from reportType" dependency "$(jq -r .kind <<<"$v1")"
 assert_eq "package name colon form" "org.example:lib" "$(jq -r .package.name <<<"$v1")"
 assert_eq "package version" 1.2.3 "$(jq -r .package.version <<<"$v1")"
 assert_eq "fix version from solution" 1.2.4 "$(jq -r .package.fix_version <<<"$v1")"
+# gl_fix <solution> <version> -> fix_version the GitLab mapper derives
+gl_fix() {
+    jq -nc --arg s "$1" --arg v "$2" '{data: {project: {vulnerabilities: {nodes: [
+        {id: "gid://gitlab/Vulnerability/9", title: "t", severity: "High", reportType: "DEPENDENCY_SCANNING",
+         webUrl: "https://gitlab.example.com/x", solution: $s, identifiers: [],
+         location: {file: "package.json",
+                    dependency: {package: {name: "tar-fs"}, version: (if $v == "" then null else $v end)}}}]}}}}' \
+        | jq -r "$SI_GL_MAP"' | .[0].package.fix_version'
+}
+assert_eq "solution release lines pick 3.1.1 for 3.1.0" 3.1.1 "$(gl_fix "Upgrade to versions 1.16.6, 2.1.4, 3.1.1 or above" 3.1.0)"
+assert_eq "solution release lines pick 2.1.4 for 2.0.0" 2.1.4 "$(gl_fix "Upgrade to versions 1.16.6, 2.1.4, 3.1.1 or above" 2.0.0)"
+assert_eq "single solution version" 4.17.12 "$(gl_fix "Upgrade to version 4.17.12 or above" 2.4.2)"
+assert_eq "solution without a version" null "$(gl_fix "Upgrade to the latest version" 1.0.0)"
+assert_eq "null version takes the first solution version" 1.16.6 "$(gl_fix "Upgrade to versions 1.16.6, 2.1.4" "")"
 assert_eq "identifiers keep only cve/ghsa/cwe" '["CVE-2024-1"]' "$(jq -c .identifiers <<<"$v1")"
 assert_eq "bare cwe id gains CWE- prefix" '["CWE-89"]' "$(shape_result <<<"$r" | jq -c '.findings[]|select(.key=="gitlab:code:gid://gitlab/Vulnerability/2").identifiers')"
 assert_eq "INFO severity raw kept" Info "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").severity_raw' <<<"$r")"
