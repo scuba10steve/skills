@@ -265,6 +265,32 @@ assert_contains "opencode agent denies edits" '{"action":"edit","resource":"*","
 assert_contains "opencode agent denies shell" '{"action":"shell","resource":"*","effect":"deny"}' "$oc"
 printf '#!/usr/bin/env bash\necho "REVIEW-FROM-opencode"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/opencode"
 
+printf '#!/usr/bin/env bash\nprintf "ARG:%%s\\n" "$@"\nexit 3\n' > "$STUBDIR/glab"
+duo_out="$(run_target duo "review" 30 2>/dev/null)"; duo_rc=$?
+assert_eq "duo propagates CLI failure" "3" "$duo_rc"
+assert_eq "duo argv prefix" $'ARG:duo\nARG:cli\nARG:--yes\nARG:run\nARG:--workflow-type\nARG:chat\nARG:--flow-config' \
+    "$(printf '%s\n' "$duo_out" | head -n 7)"
+assert_eq "duo argv suffix" $'ARG:--goal\nARG:review' "$(printf '%s\n' "$duo_out" | tail -n 2)"
+duo_flow="$(printf '%s\n' "$duo_out" | sed -n '8p' | sed 's/^ARG://')"
+assert_eq "duo flow is valid json" "0" "$(printf '%s' "$duo_flow" | jq -e . >/dev/null 2>&1; echo $?)"
+assert_eq "duo flow version" "v1" "$(printf '%s' "$duo_flow" | jq -r '.version')"
+assert_eq "duo flow type is chat-partial" "chat-partial" "$(printf '%s' "$duo_flow" | jq -r '.environment')"
+assert_eq "duo flow has one component" "1" "$(printf '%s' "$duo_flow" | jq '.components | length')"
+assert_eq "duo flow has one prompt" "1" "$(printf '%s' "$duo_flow" | jq '.prompts | length')"
+assert_eq "duo entry point is the component" "true" \
+    "$(printf '%s' "$duo_flow" | jq '.flow.entry_point == .components[0].name and .components[0].type == "AgentComponent"')"
+assert_eq "duo component prompt is the prompt" "true" \
+    "$(printf '%s' "$duo_flow" | jq '.components[0].prompt_id == .prompts[0].prompt_id')"
+assert_eq "duo toolset is read-only" '["list_dir","read_file","read_files","find_files","grep"]' \
+    "$(printf '%s' "$duo_flow" | jq -c '.components[0].toolset')"
+assert_eq "duo goal is bound" '[{"from":"context:goal","as":"goal"}]' \
+    "$(printf '%s' "$duo_flow" | jq -c '.components[0].inputs')"
+assert_eq "duo prompt uses goal" "{{goal}}" "$(printf '%s' "$duo_flow" | jq -r '.prompts[0].prompt_template.user')"
+for forbidden in run_command edit_file create_file run_git_command; do
+    assert_eq "duo flow lacks $forbidden" "0" "$(printf '%s' "$duo_flow" | grep -c "$forbidden" | tr -d ' ')"
+done
+printf '#!/usr/bin/env bash\necho "REVIEW-FROM-glab"\ncat >/dev/null 2>&1 || true\n' > "$STUBDIR/glab"
+
 # Multi target without --yes shows preview and does NOT run.
 preview="$(cd "$TR" && bash "$SCRIPT" claude,gemini "review")"
 assert_contains "preview count" "2 paid reviewer runs" "$preview"
