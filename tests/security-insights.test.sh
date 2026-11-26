@@ -362,6 +362,23 @@ assert_eq "3.4.1 and 3.3.2 both kept" '["3.3.2","3.4.1"]' "$(jq -c '[.findings[0
 assert_eq "candidates below version null fix_version" null "$(fix_pair 1.16.6 "" 3.1.0 | jq -r '.findings[0].package.fix_version')"
 assert_eq "null version takes the lowest candidate" 1.5.0 "$(fix_pair 2.0.0 1.5.0 null | jq -r '.findings[0].package.fix_version')"
 assert_eq "numeric not lexical compare" 1.9.1 "$(fix_pair 1.10.0 1.9.1 1.9.0 | jq -r '.findings[0].package.fix_version')"
+f=$({ raw_finding gitlab 1 dependency high source CVE-1 2.0.0 "" "" org.example:lib null
+      raw_finding moderne 2 dependency high source CVE-1 1.5.0 "" "" org.example:lib null; } | shape_input)
+rc=0; out=$(si_shape <<<"$f") || rc=$?
+assert_eq "null version shapes without error" 0 "$rc"
+assert_eq "null version with candidates -> lowest" 1.5.0 "$(jq -r '.findings[0].package.fix_version' <<<"$out")"
+assert_eq "candidate-less member beside 1.2.4" 1.2.4 "$({ raw_finding gitlab 1 dependency high source CVE-1 ""
+    raw_finding moderne 2 dependency high source CVE-1 1.2.4; } | shape_input | si_shape | jq -r '.findings[0].package.fix_version')"
+assert_eq "null and numeric candidates skipped or coerced" 1.2.4 "$(jq -nr "$SI_VER_JQ"' [null, "1.2.4", {}, 1] | lowest_at_or_above("1.2.3")')"
+assert_eq "numeric candidate coerced" 2 "$(jq -nr "$SI_VER_JQ"' [null, 2] | lowest_at_or_above(1)')"
+rc=0; out=$({ raw_finding moderne 1 dependency high source CVE-1 "" | jq -c '.package.version = 1 | .package.fix_version = 2'
+    raw_finding gitlab 2 dependency high source CVE-1 1.0.5 | jq -c '.package.version = 1'; } | shape_input | si_shape) || rc=$?
+assert_eq "numeric moderne version shapes without error" 0 "$rc"
+assert_eq "numeric version picks lowest at or above" 1.0.5 "$(jq -r '.findings[0].package.fix_version' <<<"$out")"
+assert_eq "RELEASE suffix ignored" 4.3.20.RELEASE "$(fix_pair 4.3.20.RELEASE 4.3.18.RELEASE 4.3.19.RELEASE | jq -r '.findings[0].package.fix_version')"
+assert_eq "android/jre tails ignored for order" "1 -1" "$(jq -nr "$SI_VER_JQ"' "\(vercmp("32.0.0-android"; "31.1-jre")) \(vercmp("2.12.0.sp3"; "2.12.1"))"')"
+assert_eq "vercmp total over null and numbers" "-1 0" "$(jq -nr "$SI_VER_JQ"' "\(vercmp(null; "0.1")) \(vercmp(2; "2.0"))"')"
+assert_eq "suffixed equal versions compare equal" 0 "$(jq -nr "$SI_VER_JQ"' vercmp("24.1.1-android"; "24.1.1-jre")')"
 assert_eq "highest severity wins" critical "$({ raw_finding gitlab 1 dependency low source CVE-2024-1
     raw_finding moderne 2 dependency critical source CVE-2024-1; } | shape_input | si_shape | jq -r '.findings[0].severity')"
 o=$({ raw_finding github 5 code "" source ""; raw_finding github 4 code low source ""
@@ -495,6 +512,8 @@ assert_eq "solution release lines pick 2.1.4 for 2.0.0" 2.1.4 "$(gl_fix "Upgrade
 assert_eq "single solution version" 4.17.12 "$(gl_fix "Upgrade to version 4.17.12 or above" 2.4.2)"
 assert_eq "solution without a version" null "$(gl_fix "Upgrade to the latest version" 1.0.0)"
 assert_eq "null version takes the first solution version" 1.16.6 "$(gl_fix "Upgrade to versions 1.16.6, 2.1.4" "")"
+assert_eq "null version with three release lines takes the first" 1.16.6 "$(gl_fix "Upgrade to versions 1.16.6, 2.1.4, 3.1.1 or above" "")"
+assert_eq "RELEASE version in solution" 5.3.31.RELEASE "$(gl_fix "Upgrade to versions 4.3.30.RELEASE, 5.3.31.RELEASE or above" 5.3.2.RELEASE)"
 assert_eq "identifiers keep only cve/ghsa/cwe" '["CVE-2024-1"]' "$(jq -c .identifiers <<<"$v1")"
 assert_eq "bare cwe id gains CWE- prefix" '["CWE-89"]' "$(shape_result <<<"$r" | jq -c '.findings[]|select(.key=="gitlab:code:gid://gitlab/Vulnerability/2").identifiers')"
 assert_eq "INFO severity raw kept" Info "$(jq -r '.findings[]|select(.native_id=="gid://gitlab/Vulnerability/2").severity_raw' <<<"$r")"

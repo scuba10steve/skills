@@ -163,15 +163,19 @@ si_read() {
 
 # Dotted numeric version order shared by the merge and the GitLab mapper: segments compare
 # numerically, a missing segment is 0, and a non-numeric tail such as -beta is ignored.
+# A number is compared as its string; null, "" and any other type are unknown.
 SI_VER_JQ='
+def verstr: if type == "number" then tostring elif type == "string" and . != "" then . else null end;
 def verkey($width): [splits("\\.") | (capture("^(?<n>[0-9]+)").n // "0") | tonumber]
   | . + [range($width - length) | 0];
 def vercmp($a; $b):
-  ([$a, $b] | map(split(".") | length) | max) as $w
+  ([$a, $b] | map(verstr // "")) as [$a, $b]
+  | ([$a, $b] | map(split(".") | length) | max) as $w
   | ($a | verkey($w)) as $x | ($b | verkey($w)) as $y
   | if $x < $y then -1 elif $x > $y then 1 else 0 end;
 def lowest_at_or_above($v):
-  map(select($v == null or vercmp(.; $v) >= 0))
+  ($v | verstr) as $v
+  | map(verstr | select(. != null and ($v == null or vercmp(.; $v) >= 0)))
   | reduce .[] as $c (null; if . == null or vercmp($c; .) < 0 then $c else . end);
 '
 
@@ -345,8 +349,9 @@ def kind: {"DEPENDENCY_SCANNING": "dependency", "SAST": "code", "SECRET_DETECTIO
            "CONTAINER_SCANNING": "container"}[.reportType] // "unknown";
 def colon: if (test("@") | not) and (split("/") | length) == 2 then sub("/"; ":") else . end;
 def fix($v):
-  [(.solution // "") | capture("(?is)upgrade(?<rest>.*)").rest | scan("[0-9]+(?:\\.[0-9]+)+")]
-  | if $v == null then .[0] else lowest_at_or_above($v) end;
+  [.solution | strings | capture("(?is)upgrade(?<rest>.*)").rest
+   | scan("[0-9]+(?:\\.[0-9]+)+(?:[.-][A-Za-z][A-Za-z0-9]*)*")]
+  | if ($v | verstr) == null then .[0] else lowest_at_or_above($v) end;
 def loc($k):
   if $k == "container" then (if .image != null then [{file: .image, line: null}] else [] end)
   elif .file != null then [{file, line: (.startLine // null)}] else [] end;
