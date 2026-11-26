@@ -53,7 +53,9 @@ Open vulnerability findings for the current repository from its forge and Modern
    - Render `sources[].name` as a compact set, e.g. `[gitlab,moderne]`.
    - `severity_origin == "policy"`: render the severity with a `(policy)` suffix.
    - Members naming more than one distinct package (`sources[].package.name`): render one `<package@version → fix_version>` line per distinct package, taken from `sources[].package`.
-   - Candidates for the same package (`fix_candidates[].package`) that differ: render `→ 1.2.4 | 1.3.0 (sources disagree)`. Candidates for different packages never disagree.
+   - Fix candidates (`fix_candidates[]` whose `package` is the merged package; candidates for other packages are never compared with them):
+     - More than one distinct version, `fix_version` set: render `→ <fix_version> (also <other candidates, ascending>)`.
+     - `fix_version` null with candidates: render `→ candidates predate the installed version: <list>`.
    - Omit the package column for `code` and `secret` findings. Omit the location column for dependency findings with no manifest path. A GitHub secret finding has no location: say "location not in the alert".
    - A moderne entry in `sources` whose `as_of` is older than seven days: show that date next to the finding.
    - `findings` empty with at least one source `ok`: say so, and still list skipped sources.
@@ -62,7 +64,9 @@ Open vulnerability findings for the current repository from its forge and Modern
    - **Bump.** `fix_version` present: give the coordinate and version and the step from `version`. Compare dotted numeric segments of `version` and `fix_version` left to right; the first differing segment at index 0 is major, 1 minor, 2 or later patch. If either is not dotted numerics, say the step cannot be classified. If `mod` is installed, name the finding's ecosystem recipe from the "Ecosystem to recipe" table below (the `ecosystem` of its moderne `sources[]` entry, else inferred from the manifest file in `locations`) with `-P maximumUpgradeDelta=<step>` as the one-command route; it edits that ecosystem's manifests (direct dependencies by default).
      - Transitives: `-P overrideTransitive=true` for java, python, golang and csharp; `-P transitiveFixStrategy=<value>` for nodejs, looking up the option's valid values with `mod config recipes search <recipe id> --json=options` rather than guessing.
      - Naming it is advice; running it is the user's follow-up.
-   - **Ask.** A dependency finding with no `fix_version` and no candidates, or with disagreeing candidates for the same package: name each candidate (or say none is known) and ask which to adopt, instead of falling through to the code-change route.
+   - **Ask.** A dependency finding with no `fix_version`, instead of falling through to the code-change route:
+     - No candidates: no fix is known; ask.
+     - Candidates: the candidates predate the installed version; name them and ask which to adopt.
    - **Recipe.** A code finding whose CWE (a `CWE-n` entry in its `identifiers`) maps to an `org.openrewrite.java.security.*` recipe in the table below. Name it only when all three hold: the location is a `.java` file, `mod` is installed, and `mod config recipes search <id> --json=id` returns that id. Anything unmapped, or any failed condition, falls through to the code-change route.
    - **Code change.** Explain the vulnerability class in two sentences and point at `file:line`. Use the source's `solution` text when present. `container` and `unknown` findings use this route when they have a location, else the dismissal route's ask.
    - **Dismissal.** Never inferred.
